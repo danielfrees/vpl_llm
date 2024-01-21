@@ -1,16 +1,16 @@
+import os
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Dict, List, Optional, Type, Union, cast
 
 import numpy as np
 import torch
-import torch.nn.functional as F  # noqa: N812
 from datasets import Dataset, concatenate_datasets, load_dataset
 from peft import LoraConfig, TaskType, get_peft_model
 from torch import nn
 from torch.optim.lr_scheduler import LambdaLR
 from transformers import (
-    AutoModelForSequenceClassification,
+    AutoModelForCausalLM,
     AutoTokenizer,
     HfArgumentParser,
     PreTrainedTokenizerBase,
@@ -20,10 +20,10 @@ from transformers import (
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import PaddingStrategy
 from typing_extensions import Literal, TypeAlias
+from .vae_utils import Decoder, Encoder, VAEModel, Annealer
 
 RewardModelType: TypeAlias = Literal["base", "mean_and_variance", "categorical"]
 DataSubset: TypeAlias = Literal["both", "helpful", "harmless"]
-
 
 @dataclass
 class ScriptArguments:
@@ -135,6 +135,9 @@ class ScriptArguments:
         metadata={"help": "Whether to run eval after the first step"},
     )
     log_dir: str = field(default="data/reward_models/hh_rlhf")
+    kl_loss_weight: float = field(default=1.0)
+    latent_dim: int = field(default=256)
+    embed_dim: int = field(default=4096)
 
 
 class HHRLHFPreprocessor(object):
@@ -148,11 +151,13 @@ class HHRLHFPreprocessor(object):
             "attention_mask_chosen": [],
             "input_ids_rejected": [],
             "attention_mask_rejected": [],
+            "fused_ids": [],
+            "fused_attention": []
         }
         for chosen, rejected in zip(examples["chosen"], examples["rejected"]):
             tokenized_chosen = self.tokenizer(chosen, **self.tokenizer_kwargs)
             tokenized_rejected = self.tokenizer(rejected, **self.tokenizer_kwargs)
-
+            tokenized_rejected = self.tokenizer(chosen + "" + rejected, **self.tokenizer_kwargs)
             new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
             new_examples["attention_mask_chosen"].append(
                 tokenized_chosen["attention_mask"]
@@ -179,9 +184,11 @@ def get_cosine_decay_lr_lambda(current_step: int, *, num_training_steps: int):
 
 
 class RewardTrainer(Trainer):
-    def __init__(self, *args, lr_lambda=None, **kwargs):
+    def __init__(self, *args, lr_lambda=None, kl_loss_weight=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.lr_lambda = lr_lambda
+        self.kl_loss_weight = kl_loss_weight
+        self.annealer = Annealer(total_steps=1e4, shape='cosine', baseline=0.0, cyclical=True)
 
     @classmethod
     def per_sample_loss(cls, rewards_chosen, rewards_rejected):
@@ -191,7 +198,7 @@ class RewardTrainer(Trainer):
         return torch.mean(self.per_sample_loss(rewards_chosen, rewards_rejected))
 
     def compute_loss(self, model, inputs, return_outputs=False):
-        all_rewards = model(
+        embeddings = model.llm(
             torch.concatenate(
                 [
                     inputs["input_ids_chosen"],
@@ -206,15 +213,33 @@ class RewardTrainer(Trainer):
                 ],
                 dim=0,
             ),
-        )[0]
-        all_rewards = all_rewards.reshape(2, -1, all_rewards.shape[-1])
-        rewards_chosen = all_rewards[0]
-        rewards_rejected = all_rewards[1]
-        loss = self.loss(rewards_chosen, rewards_rejected)
+            return_dict=True,
+            output_hidden_states=True)['hidden_states'][0]
+        embeddings = embeddings.mean(dim=1)
+        embeddings = embeddings.reshape(2, -1, embeddings.shape[-1])
+        e0 = embeddings[0]
+        e1 = embeddings[1]
+
+        p, rewards_chosen, rewards_rejected, mean, log_var = model(e0, e1)
+        reproduction_loss = self.loss(rewards_chosen, rewards_rejected)
+        kld = -torch.sum(
+            1
+            + (log_var - model.prior_log_var)
+            - (log_var - model.prior_log_var).exp()
+            - (mean.pow(2) - model.prior_mean.pow(2)) / (model.prior_log_var.exp())
+        )
+        kld = self.annealer(kld)
+        self.annealer.step()
+
+        loss = reproduction_loss + kld
         if return_outputs:
             return loss, {
                 "rewards_chosen": rewards_chosen,
                 "rewards_rejected": rewards_rejected,
+                "mean": mean,
+                "log_var": log_var,
+                "model_mean": model.prior_mean,
+                "model_log_var": model.prior_log_var,
             }
         return loss
 
@@ -231,89 +256,29 @@ class RewardTrainer(Trainer):
 
     @classmethod
     def compute_metrics(cls, eval_prediction: EvalPrediction):
-        rewards_chosen, rewards_rejected = eval_prediction.predictions
+        rewards_chosen, rewards_rejected, mean, log_var, model_mean, model_log_var  = eval_prediction.predictions
         rewards_chosen = torch.from_numpy(rewards_chosen)
         rewards_rejected = torch.from_numpy(rewards_rejected)
-
+        mean = torch.from_numpy(mean)
+        log_var = torch.from_numpy(log_var)
+        model_mean = torch.from_numpy(model_mean).view(mean.shape)
+        model_log_var = torch.from_numpy(model_log_var).view(log_var.shape)
+        
         loss = cls.per_sample_loss(rewards_chosen, rewards_rejected)
-        accuracy = torch.mean((loss < np.log(2)).float())
+        kld = -torch.sum(
+            1
+            + (log_var - model_log_var)
+            - (log_var - model_log_var).exp()
+            - (mean.pow(2) - model_mean.pow(2)) / (model_log_var.exp())
+        )
+        accuracy = torch.mean((rewards_chosen > rewards_rejected).float())
 
         return {
             "loss": loss.mean().item(),
             "accuracy": accuracy.item(),
+            "kld": kld.item(),
+            "total_loss": loss.mean().item() + kld.item(),
         }
-
-
-class MeanAndVarianceRewardTrainer(RewardTrainer):
-    def __init__(self, *args, variance_penalty: float = 0.0, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.variance_penalty = variance_penalty
-
-    @classmethod
-    def per_sample_loss(cls, rewards_chosen, rewards_rejected):
-        mean_chosen = rewards_chosen[:, 0]
-        std_chosen = F.softplus(rewards_chosen[:, 1])
-        mean_rejected = rewards_rejected[:, 0]
-        std_rejected = F.softplus(rewards_rejected[:, 1])
-
-        diff_mean = mean_chosen - mean_rejected
-        var_combined = std_chosen**2 + std_rejected**2
-        z = diff_mean / torch.sqrt(var_combined)
-        return F.softplus(-z * np.sqrt(2 * np.pi))
-
-    def loss(self, rewards_chosen, rewards_rejected):
-        std_chosen = F.softplus(rewards_chosen[:, 1])
-        std_rejected = F.softplus(rewards_rejected[:, 1])
-        variance_loss = (std_chosen**2 + std_rejected**2).mean()
-
-        log_loss = self.per_sample_loss(rewards_chosen, rewards_rejected).mean()
-
-        if self.model.training:
-            return log_loss + self.variance_penalty * variance_loss
-        else:
-            return log_loss
-
-
-class CategoricalRewardTrainer(RewardTrainer):
-    def __init__(self, *args, entropy_coeff: float = 0.0, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.entropy_coeff = entropy_coeff
-
-    @classmethod
-    def per_sample_loss(cls, rewards_chosen, rewards_rejected):
-        num_atoms = rewards_chosen.size()[1]
-        device = rewards_chosen.device
-
-        comparison_matrix = torch.empty(
-            (num_atoms, num_atoms),
-            device=device,
-            dtype=rewards_chosen.dtype,
-        )
-        atom_values = torch.linspace(0, 1, num_atoms, device=device)
-        comparison_matrix[:] = atom_values[None, :] > atom_values[:, None]
-        comparison_matrix[atom_values[None, :] == atom_values[:, None]] = 0.5
-
-        dist_rejected = rewards_rejected.softmax(1)
-        dist_chosen = rewards_chosen.softmax(1)
-        prob_chosen = ((dist_rejected @ comparison_matrix) * dist_chosen).sum(dim=1)
-        return -prob_chosen.log()
-
-    def loss(self, rewards_chosen, rewards_rejected):
-        dist_rejected = rewards_rejected.softmax(1)
-        dist_chosen = rewards_chosen.softmax(1)
-        mean_dist = torch.concatenate(
-            [dist_chosen, dist_rejected],
-            dim=0,
-        ).mean(dim=0)
-        entropy_loss = torch.sum(mean_dist * mean_dist.log())
-
-        log_loss = self.per_sample_loss(rewards_chosen, rewards_rejected).mean()
-
-        if self.model.training:
-            return log_loss + self.entropy_coeff * entropy_loss
-        else:
-            return log_loss
-
 
 def get_hh_rlhf_dataset(
     data_subset: DataSubset,
@@ -351,9 +316,7 @@ def get_hh_rlhf_dataset(
 
 
 trainer_classes: Dict[RewardModelType, Type[RewardTrainer]] = {
-    "base": RewardTrainer,
-    "mean_and_variance": MeanAndVarianceRewardTrainer,
-    "categorical": CategoricalRewardTrainer,
+    "vae": RewardTrainer,
 }
 
 
@@ -386,10 +349,7 @@ if __name__ == "__main__":
         f"__{script_args.train_dataset_size}_{script_args.learning_rate}"
         f"_{script_args.lr_scheduler_type}_{script_args.num_train_epochs}"
     )
-    if reward_model_type == "categorical":
-        output_name += f"_{script_args.num_atoms}_{script_args.entropy_coeff}"
-    elif reward_model_type == "mean_and_variance":
-        output_name += f"_{script_args.variance_penalty}"
+    output_name += f"_{script_args.kl_loss_weight}_{script_args.latent_dim}_{script_args.embed_dim}"
 
     trainer_kwargs: Dict[str, Any] = {}
     if script_args.lr_scheduler_type == "step":
@@ -411,7 +371,7 @@ if __name__ == "__main__":
         evaluation_strategy="steps",
         eval_steps=1000,
         save_strategy="steps",
-        save_steps=1000,
+        save_steps=10000,
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,
         gradient_checkpointing=script_args.gradient_checkpointing,
         deepspeed=script_args.deepspeed,
@@ -436,7 +396,7 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True)
 
     peft_config = LoraConfig(
-        task_type=TaskType.SEQ_CLS,
+        task_type=TaskType.CAUSAL_LM,
         inference_mode=False,
         r=8,
         lora_alpha=32,
@@ -446,21 +406,14 @@ if __name__ == "__main__":
     torch.set_anomaly_enabled(True)
 
     trainer_class = trainer_classes[reward_model_type]
-    if reward_model_type == "base":
-        num_labels = 1
-    elif reward_model_type == "mean_and_variance":
-        num_labels = 2
-        trainer_kwargs["variance_penalty"] = script_args.variance_penalty
-    elif reward_model_type == "categorical":
-        num_labels = script_args.num_atoms
-        trainer_kwargs["entropy_coeff"] = script_args.entropy_coeff
+    embed_dim = script_args.embed_dim
 
-    model = AutoModelForSequenceClassification.from_pretrained(
-        script_args.model_name, num_labels=num_labels, torch_dtype=torch.bfloat16
+    model = AutoModelForCausalLM.from_pretrained(
+        script_args.model_name, torch_dtype=torch.bfloat16
     )
     # We multiply the final linear layer's weights by 0.01 because this seems to
     # significantly stabilize training and lead to better optimization of the loss.
-    model.score.weight.data *= 0.01
+    # model.score.weight.data *= 0.01
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
 
@@ -541,8 +494,13 @@ if __name__ == "__main__":
             }
 
     # Train the model.
+    latent_dim = script_args.latent_dim
+    encoder = Encoder(input_dim=2*embed_dim, hidden_dim=512, latent_dim=latent_dim)
+    decoder = Decoder(input_dim=(latent_dim+embed_dim), hidden_dim=512)
+    vae_model = VAEModel(encoder, decoder, model, latent_dim=latent_dim, learned_prior=True)
+
     trainer = trainer_class(
-        model=model,
+        model=vae_model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
@@ -552,10 +510,17 @@ if __name__ == "__main__":
             max_length=script_args.max_length,
             pad_to_multiple_of=64,
         ),
+        kl_loss_weight=script_args.kl_loss_weight,
         **trainer_kwargs,
     )
 
     trainer.train(script_args.resume_from_checkpoint)
 
     print("Saving last checkpoint of the model")
+
     model.save_pretrained(output_name + "_peft_last_checkpoint")
+    torch.save(vae_model.Encoder.state_dict(), "llama-vae/final_vae_model_encoder_state_dict.pt")
+    torch.save(vae_model.Decoder.state_dict(), "llama-vae/final_vae_model_decoder_state_dict.pt")
+    torch.save(vae_model.prior_mean, "llama-vae/final_vae_model_mean_state_dict.pt")
+    torch.save(vae_model.prior_log_var, "llama-vae/final_vae_model_log_var_state_dict.pt")
+    torch.save(vae_model, "final_vae_model.pt")
