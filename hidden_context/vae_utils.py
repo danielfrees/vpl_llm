@@ -3,27 +3,39 @@ import torch
 import torch.nn as nn
 import math
 
-class Encoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim, latent_dim):
-        super(Encoder, self).__init__()
-
-        # self._model = nn.Sequential(
-        #     nn.Linear(input_dim, latent_dim),
-        #     nn.LeakyReLU(0.2),
-        #     nn.Linear(hidden_dim, hidden_dim),
-        #     nn.LeakyReLU(0.2),
-        #     nn.Linear(hidden_dim, hidden_dim),
-        #     nn.LeakyReLU(0.2),
-        #     nn.Linear(hidden_dim, hidden_dim),
-        #     nn.LeakyReLU(0.2),
-        # )
-        self.FC_mean = nn.Linear(input_dim, latent_dim)
-        self.FC_var = nn.Linear(input_dim, latent_dim)
+class PreFusionEncoder(nn.Module):
+    def __init__(self, embed_dim, latent_dim):
+        super(PreFusionEncoder, self).__init__()
+        self.FC_mean = nn.Linear(embed_dim, latent_dim)
+        self.FC_var = nn.Linear(embed_dim, latent_dim)
 
     def forward(self, x):
-        # h_ = self._model(x)
+        x = x.bfloat16()
         mean = self.FC_mean(x)
         log_var = self.FC_var(x)
+        return mean, log_var
+    
+class Encoder(nn.Module):
+    def __init__(self, embed_dim, latent_dim, hidden_dim):
+        super(Encoder, self).__init__()
+
+        self._model = nn.Sequential(
+            nn.Linear(2*embed_dim, hidden_dim),
+            nn.LeakyReLU(0.2),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LeakyReLU(0.2),
+            # nn.Linear(hidden_dim, hidden_dim),
+            # nn.LeakyReLU(0.2),
+            # nn.Linear(hidden_dim, hidden_dim),
+            # nn.LeakyReLU(0.2),
+        )
+        self.FC_mean = nn.Linear(hidden_dim, latent_dim)
+        self.FC_var = nn.Linear(hidden_dim, latent_dim)
+
+    def forward(self, x):
+        h_ = self._model(x)
+        mean = self.FC_mean(h_)
+        log_var = self.FC_var(h_)
         return mean, log_var
 
 
@@ -31,15 +43,15 @@ class Decoder(nn.Module):
     def __init__(self, input_dim, hidden_dim):
         super(Decoder, self).__init__()
         self._model = nn.Sequential(
-            nn.Linear(input_dim, 1),
-            # nn.LeakyReLU(0.2),
-            # nn.Linear(hidden_dim, hidden_dim),
-            # nn.LeakyReLU(0.2),
-            # nn.Linear(hidden_dim, hidden_dim),
-            # nn.LeakyReLU(0.2),
-            # nn.Linear(hidden_dim, hidden_dim),
-            # nn.LeakyReLU(0.2),
-            # nn.Linear(hidden_dim, 1),
+            nn.Linear(input_dim, hidden_dim),
+            nn.LeakyReLU(0.2),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LeakyReLU(0.2),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LeakyReLU(0.2),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LeakyReLU(0.2),
+            nn.Linear(hidden_dim, 1),
         )
 
     def forward(self, x):
@@ -65,17 +77,17 @@ class VAEModel(nn.Module):
         z = mean + var * epsilon  # reparameterization trick
         return z
 
-    def forward(self, e0, e1):
-        encoder_input = torch.cat([e0, e1], dim=1).reshape(e0.shape[0], -1)
-        mean, log_var = self.Encoder(encoder_input)
+    def forward(self, fused, e0, e1):
+        # encoder_input = torch.cat([e0, e1], dim=1).reshape(e0.shape[0], -1)
+        mean, log_var = self.Encoder(fused)
         z = self.reparameterization(mean, torch.exp(0.5 * log_var))
 
         x0 = torch.cat([e0, z], dim=1)
         x1 = torch.cat([e1, z], dim=1)
         r0 = self.Decoder(x0)
         r1 = self.Decoder(x1)
-        p = torch.sigmoid(r0 - r1)
-        return p, r0, r1, mean, log_var
+        # p = torch.sigmoid(r0 - r1)
+        return None, r0, r1, mean, log_var
 
 
 class Annealer:

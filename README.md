@@ -96,3 +96,11 @@ If you find this repository useful for your research, please cite our paper as f
 ## Contact
 
 For questions about the paper or code, please contact cassidy_laidlaw@berkeley.edu or anandsranjan@berkeley.edu.
+
+
+### Running experiments
+
+slurm4 - llama baselines
+slurm5 - gpt2 baselines
+
+DONE: baselines + our model on OG anthropic dataset

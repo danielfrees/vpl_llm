@@ -10,7 +10,7 @@ from peft import LoraConfig, TaskType, get_peft_model
 from torch import nn
 from torch.optim.lr_scheduler import LambdaLR
 from transformers import (
-    AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
     AutoTokenizer,
     HfArgumentParser,
     PreTrainedTokenizerBase,
@@ -131,13 +131,14 @@ class ScriptArguments:
     )
     max_length: int = field(default=1024)
     eval_first_step: bool = field(
-        default=False,
+        default=True,
         metadata={"help": "Whether to run eval after the first step"},
     )
     log_dir: str = field(default="data/reward_models/hh_rlhf")
-    kl_loss_weight: float = field(default=1.0)
-    latent_dim: int = field(default=256)
-    embed_dim: int = field(default=4096)
+    kl_loss_weight: float = field(default=0.01)
+    latent_dim: int = field(default=512)
+    embed_dim: int = field(default=1024)
+    use_annealing: bool = field(default=True)
 
 
 class HHRLHFPreprocessor(object):
@@ -151,8 +152,6 @@ class HHRLHFPreprocessor(object):
             "attention_mask_chosen": [],
             "input_ids_rejected": [],
             "attention_mask_rejected": [],
-            "fused_ids": [],
-            "fused_attention": []
         }
         for chosen, rejected in zip(examples["chosen"], examples["rejected"]):
             tokenized_chosen = self.tokenizer(chosen, **self.tokenizer_kwargs)
@@ -184,11 +183,12 @@ def get_cosine_decay_lr_lambda(current_step: int, *, num_training_steps: int):
 
 
 class RewardTrainer(Trainer):
-    def __init__(self, *args, lr_lambda=None, kl_loss_weight=None, **kwargs):
+    def __init__(self, *args, lr_lambda=None, kl_loss_weight=None, use_annealing=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.lr_lambda = lr_lambda
         self.kl_loss_weight = kl_loss_weight
-        self.annealer = Annealer(total_steps=1e4, shape='cosine', baseline=0.0, cyclical=True)
+        self.use_annealing = use_annealing
+        self.annealer = Annealer(total_steps=1e4, shape='cosine', baseline=0.1, cyclical=True)
 
     @classmethod
     def per_sample_loss(cls, rewards_chosen, rewards_rejected):
@@ -213,25 +213,36 @@ class RewardTrainer(Trainer):
                 ],
                 dim=0,
             ),
-            return_dict=True,
-            output_hidden_states=True)['hidden_states'][0]
-        embeddings = embeddings.mean(dim=1)
+        )[0]
+        # embeddings = embeddings.mean(dim=1)
         embeddings = embeddings.reshape(2, -1, embeddings.shape[-1])
         e0 = embeddings[0]
         e1 = embeddings[1]
+        fused_embed = torch.cat([e0, e1], dim=-1)
 
-        p, rewards_chosen, rewards_rejected, mean, log_var = model(e0, e1)
+        _, rewards_chosen, rewards_rejected, mean, log_var = model(fused_embed, e0, e1)
         reproduction_loss = self.loss(rewards_chosen, rewards_rejected)
-        kld = -torch.sum(
-            1
-            + (log_var - model.prior_log_var)
-            - (log_var - model.prior_log_var).exp()
-            - (mean.pow(2) - model.prior_mean.pow(2)) / (model.prior_log_var.exp())
-        )
-        kld = self.annealer(kld)
-        self.annealer.step()
-
+        # kld = -self.kl_loss_weight * torch.sum(
+        #     1
+        #     + (log_var - model.prior_log_var)
+        #     - (log_var - model.prior_log_var).exp()
+        #     - (mean.pow(2) - model.prior_mean.pow(2)) / (model.prior_log_var.exp())
+        # )
+        kld = - torch.sum(1+ log_var - mean.pow(2) - log_var.exp())
+        if self.use_annealing:
+            kld = self.annealer(kld)
+            self.annealer.step()
+        # else:
+        kld = self.kl_loss_weight * kld
         loss = reproduction_loss + kld
+        
+        accuracy = torch.mean((rewards_chosen > rewards_rejected).float())
+        self.log({
+            "train_loss": reproduction_loss.mean().item(),
+            "train_kld": kld.mean().item(),
+            "train_accuracy": accuracy.mean().item()
+        })
+
         if return_outputs:
             return loss, {
                 "rewards_chosen": rewards_chosen,
@@ -271,7 +282,7 @@ class RewardTrainer(Trainer):
             - (log_var - model_log_var).exp()
             - (mean.pow(2) - model_mean.pow(2)) / (model_log_var.exp())
         )
-        accuracy = torch.mean((rewards_chosen > rewards_rejected).float())
+        accuracy = torch.mean((loss < np.log(2)).float())
 
         return {
             "loss": loss.mean().item(),
@@ -396,7 +407,7 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True)
 
     peft_config = LoraConfig(
-        task_type=TaskType.CAUSAL_LM,
+        task_type=TaskType.SEQ_CLS,
         inference_mode=False,
         r=8,
         lora_alpha=32,
@@ -408,8 +419,8 @@ if __name__ == "__main__":
     trainer_class = trainer_classes[reward_model_type]
     embed_dim = script_args.embed_dim
 
-    model = AutoModelForCausalLM.from_pretrained(
-        script_args.model_name, torch_dtype=torch.bfloat16
+    model = AutoModelForSequenceClassification.from_pretrained(
+        script_args.model_name, num_labels=embed_dim, torch_dtype=torch.bfloat16
     )
     # We multiply the final linear layer's weights by 0.01 because this seems to
     # significantly stabilize training and lead to better optimization of the loss.
@@ -495,9 +506,9 @@ if __name__ == "__main__":
 
     # Train the model.
     latent_dim = script_args.latent_dim
-    encoder = Encoder(input_dim=2*embed_dim, hidden_dim=512, latent_dim=latent_dim)
+    encoder = Encoder(embed_dim=embed_dim, latent_dim=latent_dim, hidden_dim=512)
     decoder = Decoder(input_dim=(latent_dim+embed_dim), hidden_dim=512)
-    vae_model = VAEModel(encoder, decoder, model, latent_dim=latent_dim, learned_prior=True)
+    vae_model = VAEModel(encoder, decoder, model, latent_dim=latent_dim, learned_prior=False)
 
     trainer = trainer_class(
         model=vae_model,
@@ -511,6 +522,7 @@ if __name__ == "__main__":
             pad_to_multiple_of=64,
         ),
         kl_loss_weight=script_args.kl_loss_weight,
+        use_annealing=script_args.use_annealing,
         **trainer_kwargs,
     )
 
@@ -519,8 +531,10 @@ if __name__ == "__main__":
     print("Saving last checkpoint of the model")
 
     model.save_pretrained(output_name + "_peft_last_checkpoint")
-    torch.save(vae_model.Encoder.state_dict(), "llama-vae/final_vae_model_encoder_state_dict.pt")
-    torch.save(vae_model.Decoder.state_dict(), "llama-vae/final_vae_model_decoder_state_dict.pt")
-    torch.save(vae_model.prior_mean, "llama-vae/final_vae_model_mean_state_dict.pt")
-    torch.save(vae_model.prior_log_var, "llama-vae/final_vae_model_log_var_state_dict.pt")
-    torch.save(vae_model, "final_vae_model.pt")
+    output_name += "_peft_last_checkpoint"
+    os.makedirs(output_name, exist_ok=True)
+    torch.save(vae_model.Encoder.state_dict(), f"{output_name}/final_vae_model_encoder_state_dict.pt")
+    torch.save(vae_model.Decoder.state_dict(), f"{output_name}/final_vae_model_decoder_state_dict.pt")
+    torch.save(vae_model.prior_mean, f"{output_name}/final_vae_model_mean_state_dict.pt")
+    torch.save(vae_model.prior_log_var, f"{output_name}/final_vae_model_log_var_state_dict.pt")
+    torch.save(vae_model, f"{output_name}/final_vae_model.pt")
