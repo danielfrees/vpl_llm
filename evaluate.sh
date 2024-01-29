@@ -1,41 +1,42 @@
 # !/bin/bash
 
 
-# ckpts=("base_gpt2__0_3e-06_cosine_1_peft_last_checkpoint" \
-#        "categorical_gpt2__0_3e-06_cosine_1_10_0.1_peft_last_checkpoint" \
-#        "mean_and_variance_gpt2__0_3e-06_cosine_1_0.0_peft_last_checkpoint" \
-#     )
-# num_outputs=(1 10 2)
-# models=("base" "categorical" "mean_and_variance")
+ckpts=("base_Llama-2-7b-hf__0_3e-06_cosine_1_peft_last_checkpoint" \
+       "categorical_Llama-2-7b-hf__0_3e-06_cosine_1_10_0.1_peft_last_checkpoint" \
+       "mean_and_variance_Llama-2-7b-hf__0_3e-06_cosine_1_0.0_peft_last_checkpoint" \
+    )
 
-# for index in ${!ckpts[*]}
-# do
-#     python -m hidden_context.evaluate_llm_preference_model \
-#         --model_name=gpt2 \
-#         --num_outputs=${num_outputs[$index]} \
-#         --reward_model_checkpoint="/gscratch/weirdlab/sriyash/hidden-context/saved_gpt2_models_relabelled/${ckpts[$index]}"
+num_outputs=(1 10 2)
+models=("base" "categorical" "mean_and_variance")
 
-#     python -m hidden_context.evaluate_assistant_responses \
-#         --input=data/jailbroken_responses.jsonl \
-#         --model_name=gpt2 \
-#         --num_outputs=${num_outputs[$index]} \
-#         --reward_model_checkpoints "/gscratch/weirdlab/sriyash/hidden-context/saved_gpt2_models_relabelled/${ckpts[$index]}" \
-#         --reward_model_names ${models[$index]} \
-#         --output /gscratch/weirdlab/sriyash/hidden-context/saved_gpt2_models_relabelled/${ckpts[$index]}/jailbroken_responses.jsonl
-# done
+for index in ${!ckpts[*]}
+do
+    python -m hidden_context.evaluate_llm_preference_model \
+        --model_name=meta/llama \
+        --num_outputs=${num_outputs[$index]} \
+        --reward_model_checkpoint="/gscratch/weirdlab/sriyash/hidden-context/saved_gpt2_models_relabelled/${ckpts[$index]}"
+
+    python -m hidden_context.evaluate_assistant_responses \
+        --input=data/jailbroken_responses.jsonl \
+        --model_name=meta/llama \
+        --num_outputs=${num_outputs[$index]} \
+        --reward_model_checkpoints "/gscratch/weirdlab/sriyash/hidden-context/saved_gpt2_models_relabelled/${ckpts[$index]}" \
+        --reward_model_names ${models[$index]} \
+        --output /gscratch/weirdlab/sriyash/hidden-context/saved_gpt2_models_relabelled/${ckpts[$index]}/jailbroken_responses.jsonl
+done
 
 python -m hidden_context.evaluate_llm_vae_preference_model \
-        --model_name=gpt2 \
-        --reward_model_checkpoint=saved_gpt2_models_relabelled/vae_gpt2__0_3e-06_cosine_1_0.01_512_1024_peft_last_checkpoint/
+        --model_name=meta/llama \
+        --reward_model_checkpoint=/gscratch/weirdlab/sriyash/hidden-context/saved_models_llama_relabelled/vae_Llama-2-7b-hf__0_3e-06_cosine_1_0.01_512_1024_peft_last_checkpoint
         
         # --num_outputs=1 \
         # --reward_model_checkpoint="/gscratch/weirdlab/sriyash/hidden-context/data/gpt2_results/${ckpt}"
 
 python -m hidden_context.evaluate_assistant_responses_vae \
     --input=data/jailbroken_responses.jsonl \
-    --model_name=gpt2 \
-    --reward_model_checkpoint=saved_gpt2_models_relabelled/vae_gpt2__0_3e-06_cosine_1_0.01_512_1024_peft_last_checkpoint/ \
-    --output=saved_gpt2_models_relabelled/vae_gpt2__0_3e-06_cosine_1_0.01_512_1024_peft_last_checkpoint/jailbroken_responses.jsonl
+    --model_name=meta/llama \
+    --reward_model_checkpoint=/gscratch/weirdlab/sriyash/hidden-context/saved_models_llama_relabelled/vae_Llama-2-7b-hf__0_3e-06_cosine_1_0.01_512_1024_peft_last_checkpoint \
+    --output=/gscratch/weirdlab/sriyash/hidden-context/saved_models_llama_relabelled/vae_Llama-2-7b-hf__0_3e-06_cosine_1_0.01_512_1024_peft_last_checkpointjailbroken_responses.jsonl
 
 #     --num_outputs=1 \
 #     --reward_model_checkpoints PATH_1/TO/last_checkpoint PATH_2/TO/last_checkpoint \
