@@ -320,6 +320,7 @@ def get_hh_rlhf_dataset(
     split: Literal["train", "test"],
     dataset_size: int = 0,
     data_path="Anthropic/hh-rlhf",
+    use_subset_as_dir=False     # new parameter
 ) -> Dataset:
     datasets: List[Dataset] = []
     if data_path == "Anthropic/hh-rlhf":
@@ -336,11 +337,16 @@ def get_hh_rlhf_dataset(
                 ).map(lambda data: {"data_subset": "helpful"})
             )
     else:
-        datasets.append(
-            load_dataset(data_path, split=split).map(
-                lambda data: {"data_subset": data_subset}
+        if not use_subset_as_dir:       # original version: combine all data subsets within the path
+            datasets.append(
+                load_dataset(data_path, split=split).map(
+                    lambda data: {"data_subset": data_subset}
+                )
             )
-        )
+        else:                           # new version: use data_subset as subdirectory
+            datasets.append(
+                load_dataset(data_path, data_dir=data_subset, split=split)
+            )
 
     if dataset_size:
         datasets = [

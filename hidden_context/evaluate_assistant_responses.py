@@ -11,6 +11,7 @@ from transformers import (
     HfArgumentParser,
 )
 
+# evaluate on jailbreak dataset
 
 @dataclass
 class ScriptArguments:
@@ -100,7 +101,7 @@ if __name__ == "__main__":
 
             responses = example["responses"]
             reward_outputs = []
-            for response in responses:
+            for response in responses:      # usually there are two responses
                 inputs = tokenizer(
                     prompt + response,
                     return_tensors="pt",
@@ -112,7 +113,7 @@ if __name__ == "__main__":
                 reward_outputs.append(reward_output[0].tolist())
             return {
                 f"reward_outputs_{model_name}": reward_outputs,
-            }
+            }       # save two rewards to the dictionary
 
         print(f"Evaluating responses with {model_name}...")
         dataset = dataset.map(

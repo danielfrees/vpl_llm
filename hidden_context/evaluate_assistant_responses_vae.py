@@ -12,6 +12,8 @@ from transformers import (
 )
 import numpy as np
 
+# evaluate on jailbreak dataset
+
 @dataclass
 class ScriptArguments:
     reward_model_checkpoints: str = field(
