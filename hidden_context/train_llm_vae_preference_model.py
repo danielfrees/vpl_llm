@@ -1,29 +1,40 @@
 import os
 from dataclasses import dataclass, field
-from functools import partial
 from typing import Any, Dict, List, Optional, Type, Union, cast
 
 import numpy as np
 import torch
-from datasets import Dataset, concatenate_datasets, load_dataset
+import random
 from peft import LoraConfig, TaskType, get_peft_model
-from torch import nn
-from torch.optim.lr_scheduler import LambdaLR
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
     HfArgumentParser,
     PreTrainedTokenizerBase,
-    Trainer,
     TrainingArguments,
+    AutoModelForCausalLM,
 )
-from transformers.trainer_utils import EvalPrediction
 from transformers.utils import PaddingStrategy
-from typing_extensions import Literal, TypeAlias
-from .vae_utils import Decoder, Encoder, VAEModel, Annealer
+from .vae_utils import VAETrainer, VAEModel
 
-RewardModelType: TypeAlias = Literal["base", "mean_and_variance", "categorical"]
-DataSubset: TypeAlias = Literal["both", "helpful", "harmless"]
+from .train_llm_preference_model import (
+    get_step_decay_lr_lambda,
+    get_cosine_decay_lr_lambda,
+    RewardModelType,
+    DataSubset,
+    get_hh_rlhf_dataset,
+)
+
+import sys, ipdb, traceback
+
+
+def info(type, value, tb):
+    traceback.print_exception(type, value, tb)
+    ipdb.pm()
+
+
+sys.excepthook = info
+
 
 @dataclass
 class ScriptArguments:
@@ -36,7 +47,7 @@ class ScriptArguments:
         default=None,
         metadata={
             "help": "Path to deepspeed config if using deepspeed. You may need this "
-            "if the model that you want to train doesn't fit on a single GPU."
+                    "if the model that you want to train doesn't fit on a single GPU."
         },
     )
     per_device_train_batch_size: int = field(default=2)
@@ -48,7 +59,7 @@ class ScriptArguments:
         default="gpt2",
         metadata={
             "help": "The model that you want to train from the Hugging Face hub. "
-            "E.g. gpt2, gpt2-xl, bert, etc."
+                    "E.g. gpt2, gpt2-xl, bert, etc."
         },
     )
     data_path: str = field(
@@ -58,14 +69,14 @@ class ScriptArguments:
         default="both",
         metadata={
             "help": "Which subset of the data to use. You can choose between 'both', "
-            "'helpful', or 'harmless'."
+                    "'helpful', or 'harmless'."
         },
     )
     reward_model_type: str = field(
         default="base",
         metadata={
             "help": "The type of reward model to use. You can choose between "
-            "'base', 'mean_and_variance', or 'categorical'."
+                    "'base', 'mean_and_variance', or 'categorical'."
         },
     )
     num_atoms: int = field(
@@ -88,21 +99,21 @@ class ScriptArguments:
         default=None,
         metadata={
             "help": "The tokenizer for your model, if left empty will use the default "
-            "for your model",
+                    "for your model",
         },
     )
     bf16: bool = field(
         default=True,
         metadata={
             "help": "This essentially cuts the training time in half if you want to "
-            "sacrifice a little precision and have a supported GPU."
+                    "sacrifice a little precision and have a supported GPU."
         },
     )
     fp16: bool = field(
-        default=True,
+        default=False,
         metadata={
             "help": "This essentially cuts the training time in half if you want to "
-            "sacrifice a little precision and have a supported GPU."
+                    "sacrifice a little precision and have a supported GPU."
         },
     )
     num_train_epochs: int = field(
@@ -136,27 +147,61 @@ class ScriptArguments:
     )
     log_dir: str = field(default="data/reward_models/hh_rlhf")
     kl_loss_weight: float = field(default=0.01)
-    latent_dim: int = field(default=512)
+    latent_dim: int = field(default=512)    # todo: 64
+    hidden_dim: int = field(default=512)    # todo: 256
     embed_dim: int = field(default=1024)
     use_annealing: bool = field(default=True)
+    controversial_only: bool = field(default=False)
+    fixed_contexts: bool = field(default=False)
+    fixed_llm_embeddings: bool = field(default=False)
+    seed: int = field(default=0)
+    use_causal_lm: bool = field(default=False)
 
 
 class HHRLHFPreprocessor(object):
-    def __init__(self, tokenizer, **tokenizer_kwargs):
+    def __init__(self, args, tokenizer, **tokenizer_kwargs):
         self.tokenizer = tokenizer
+        self.args = args
         self.tokenizer_kwargs = tokenizer_kwargs
 
     def __call__(self, examples):
+        if self.args.fixed_llm_embeddings:
+            new_examples: dict = {
+                "embedding_chosen": [],
+                "embedding_rejected": [],
+                "contexts_embeddings": [],
+                "max_lengths": []
+            }
+            for embeddings, contexts in zip(
+                    examples["embeddings"], examples["contexts"]
+            ):
+                new_examples["embedding_chosen"].append(embeddings["embedding_chosen"])
+                new_examples["embedding_rejected"].append(embeddings["embedding_rejected"])
+                contexts_embeddings = [{"embedding_chosen": context["embedding_chosen"],
+                                        "embedding_rejected": context["embedding_rejected"]}
+                                       for context in contexts]
+                new_examples["contexts_embeddings"].append(contexts_embeddings)
+                new_examples["max_lengths"].append(0)
+            new_examples["user_type"] = examples["data_subset"]
+            return new_examples
+
         new_examples: dict = {
             "input_ids_chosen": [],
             "attention_mask_chosen": [],
             "input_ids_rejected": [],
             "attention_mask_rejected": [],
+            "max_lengths": []
         }
-        for chosen, rejected in zip(examples["chosen"], examples["rejected"]):
+        if self.args.fixed_contexts:
+            new_examples["contexts_embeddings"] = []
+        else:
+            new_examples["contexts_tokens"] = []
+        for chosen, rejected, contexts in zip(
+                examples["chosen"], examples["rejected"], examples["contexts"]
+        ):
+            max_length = 0
             tokenized_chosen = self.tokenizer(chosen, **self.tokenizer_kwargs)
             tokenized_rejected = self.tokenizer(rejected, **self.tokenizer_kwargs)
-            tokenized_rejected = self.tokenizer(chosen + "" + rejected, **self.tokenizer_kwargs)
             new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
             new_examples["attention_mask_chosen"].append(
                 tokenized_chosen["attention_mask"]
@@ -165,175 +210,267 @@ class HHRLHFPreprocessor(object):
             new_examples["attention_mask_rejected"].append(
                 tokenized_rejected["attention_mask"]
             )
+            max_length = max(max_length, len(tokenized_chosen["input_ids"]))
+            max_length = max(max_length, len(tokenized_rejected["input_ids"]))
 
+            if self.args.fixed_contexts:
+                contexts_embeddings = [{"embedding_chosen": context["embedding_chosen"],
+                                        "embedding_rejected": context["embedding_rejected"]}
+                                       for context in contexts]
+                new_examples["contexts_embeddings"].append(contexts_embeddings)
+            else:
+                tokenized_context = []
+                # Tokenize the contexts.
+                for context in contexts:
+                    chosen, rejected = context["chosen"], context["rejected"]
+                    tokenized_chosen = self.tokenizer(chosen, **self.tokenizer_kwargs)
+                    tokenized_rejected = self.tokenizer(rejected, **self.tokenizer_kwargs)
+                    tokenized_context.append(
+                        {
+                            "input_ids_chosen": tokenized_chosen["input_ids"],
+                            "attention_mask_chosen": tokenized_chosen["attention_mask"],
+                            "input_ids_rejected": tokenized_rejected["input_ids"],
+                            "attention_mask_rejected": tokenized_rejected["attention_mask"],
+                        }
+                    )
+                    max_length = max(max_length, len(tokenized_chosen["input_ids"]))
+                    max_length = max(max_length, len(tokenized_rejected["input_ids"]))
+                new_examples["contexts_tokens"].append(tokenized_context)
+            new_examples["max_lengths"].append(max_length)
+        new_examples["user_type"] = examples["data_subset"]
         return new_examples
 
 
-def get_step_decay_lr_lambda(current_step: int, *, num_training_steps: int):
-    if current_step < num_training_steps // 3:
-        return 1.0
-    elif current_step < (2 * num_training_steps) // 3:
-        return 0.1
-    else:
-        return 0.01
+trainer_classes: Dict[RewardModelType, Type[VAETrainer]] = {
+    "vae": VAETrainer,
+}
 
 
-def get_cosine_decay_lr_lambda(current_step: int, *, num_training_steps: int):
-    return 0.1 + 0.9 * 0.5 * (1 + np.cos(np.pi * current_step / num_training_steps))
+# We need to define a special data collator that batches the data in our j vs k format.
+@dataclass
+class RewardDataCollatorWithPadding:
+    args: ScriptArguments
+    tokenizer: PreTrainedTokenizerBase
+    padding: Union[bool, str, PaddingStrategy] = True
+    max_length: Optional[int] = None
+    pad_to_multiple_of: Optional[int] = None
+    return_tensors: str = "pt"
 
-
-class RewardTrainer(Trainer):
-    def __init__(self, *args, lr_lambda=None, kl_loss_weight=None, use_annealing=False, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.lr_lambda = lr_lambda
-        self.kl_loss_weight = kl_loss_weight
-        self.use_annealing = use_annealing
-        self.annealer = Annealer(total_steps=1e4, shape='cosine', baseline=0.1, cyclical=True)
-
-    @classmethod
-    def per_sample_loss(cls, rewards_chosen, rewards_rejected):
-        return -nn.functional.logsigmoid(rewards_chosen - rewards_rejected)
-
-    def loss(self, rewards_chosen, rewards_rejected):
-        return torch.mean(self.per_sample_loss(rewards_chosen, rewards_rejected))
-
-    def compute_loss(self, model, inputs, return_outputs=False):
-        embeddings = model.llm(
-            torch.concatenate(
-                [
-                    inputs["input_ids_chosen"],
-                    inputs["input_ids_rejected"],
-                ],
-                dim=0,
-            ),
-            torch.concatenate(
-                [
-                    inputs["attention_mask_chosen"],
-                    inputs["attention_mask_rejected"],
-                ],
-                dim=0,
-            ),
-        )[0]
-        # embeddings = embeddings.mean(dim=1)
-        embeddings = embeddings.reshape(2, -1, embeddings.shape[-1])
-        e0 = embeddings[0]
-        e1 = embeddings[1]
-        fused_embed = torch.cat([e0, e1], dim=-1)
-
-        _, rewards_chosen, rewards_rejected, mean, log_var = model(fused_embed, e0, e1)
-        reproduction_loss = self.loss(rewards_chosen, rewards_rejected)
-        # kld = -self.kl_loss_weight * torch.sum(
-        #     1
-        #     + (log_var - model.prior_log_var)
-        #     - (log_var - model.prior_log_var).exp()
-        #     - (mean.pow(2) - model.prior_mean.pow(2)) / (model.prior_log_var.exp())
-        # )
-        kld = - torch.sum(1+ log_var - mean.pow(2) - log_var.exp())
-        if self.use_annealing:
-            kld = self.annealer(kld)
-            self.annealer.step()
-        # else:
-        kld = self.kl_loss_weight * kld
-        loss = reproduction_loss + kld
-        
-        accuracy = torch.mean((rewards_chosen > rewards_rejected).float())
-        self.log({
-            "train_loss": reproduction_loss.mean().item(),
-            "train_kld": kld.mean().item(),
-            "train_accuracy": accuracy.mean().item()
-        })
-
-        if return_outputs:
-            return loss, {
-                "rewards_chosen": rewards_chosen,
-                "rewards_rejected": rewards_rejected,
-                "mean": mean,
-                "log_var": log_var,
-                "model_mean": model.prior_mean,
-                "model_log_var": model.prior_log_var,
-            }
-        return loss
-
-    def create_scheduler(self, num_training_steps: int, optimizer=None):
-        if self.lr_lambda is not None:
-            lr_lambda = partial(
-                self.lr_lambda,
-                num_training_steps=num_training_steps,
+    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
+        user_mapping = {
+            "helpful": 0,
+            "harmless": 1,
+        }
+        if self.args.fixed_llm_embeddings:
+            batch_size = len(features)
+            embeddings_chosen = []
+            embeddings_rejected = []
+            contexts_embeddings_chosen = []
+            contexts_embeddings_rejected = []
+            contexts_lengths = [0]
+            for feature in features:
+                embeddings_chosen.append(
+                    feature["embedding_chosen"]
+                )
+                embeddings_rejected.append(
+                    feature["embedding_rejected"]
+                )
+                contexts_embeddings_chosen.extend(
+                    [
+                        context["embedding_chosen"] for context in feature["contexts_embeddings"]
+                    ]
+                )
+                contexts_embeddings_rejected.extend(
+                    [
+                        context["embedding_rejected"] for context in feature["contexts_embeddings"]
+                    ]
+                )
+                contexts_lengths.append(len(feature["contexts_embeddings"]))
+            contexts_lengths = torch.cumsum(torch.tensor(contexts_lengths), dim=0)
+            seq_start_end = torch.stack(
+                [contexts_lengths[:-1], contexts_lengths[1:]], dim=1
             )
-            self.lr_scheduler = LambdaLR(optimizer, lr_lambda)
-            return self.lr_scheduler
-        else:
-            return super().create_scheduler(num_training_steps, optimizer)
+            user_type = [user_mapping[feature["user_type"]] for feature in features]
+            assert len(seq_start_end) == batch_size
+            return {
+                "embeddings_chosen": embeddings_chosen,
+                "embeddings_rejected": embeddings_rejected,
+                "contexts_embeddings_chosen": contexts_embeddings_chosen,
+                "contexts_embeddings_rejected": contexts_embeddings_rejected,
+                "seq_start_end": seq_start_end,
+                "return_loss": True,
+                "user_type": user_type,
+            }
+        if self.args.fixed_contexts:
+            batch_size = len(features)
+            features_chosen = []
+            features_rejected = []
+            contexts_embeddings_chosen = []
+            contexts_embeddings_rejected = []
+            contexts_lengths = [0]
+            for feature in features:
+                features_chosen.append(
+                    {
+                        "input_ids": feature["input_ids_chosen"],
+                        "attention_mask": feature["attention_mask_chosen"],
+                    }
+                )
+                features_rejected.append(
+                    {
+                        "input_ids": feature["input_ids_rejected"],
+                        "attention_mask": feature["attention_mask_rejected"],
+                    }
+                )
+                # Creating a flattened list of contexts.
+                contexts_embeddings_chosen.extend(
+                    [
+                        context["embedding_chosen"] for context in feature["contexts_embeddings"]
+                    ]
+                )
+                contexts_embeddings_rejected.extend(
+                    [
+                        context["embedding_rejected"] for context in feature["contexts_embeddings"]
+                    ]
+                )
+                # Keep track of the start and end of each sequence.
+                contexts_lengths.append(len(feature["contexts_embeddings"]))
 
-    @classmethod
-    def compute_metrics(cls, eval_prediction: EvalPrediction):
-        rewards_chosen, rewards_rejected, mean, log_var, model_mean, model_log_var  = eval_prediction.predictions
-        rewards_chosen = torch.from_numpy(rewards_chosen)
-        rewards_rejected = torch.from_numpy(rewards_rejected)
-        mean = torch.from_numpy(mean)
-        log_var = torch.from_numpy(log_var)
-        model_mean = torch.from_numpy(model_mean).view(mean.shape)
-        model_log_var = torch.from_numpy(model_log_var).view(log_var.shape)
-        
-        loss = cls.per_sample_loss(rewards_chosen, rewards_rejected)
-        kld = -torch.sum(
-            1
-            + (log_var - model_log_var)
-            - (log_var - model_log_var).exp()
-            - (mean.pow(2) - model_mean.pow(2)) / (model_log_var.exp())
+            batch = self.tokenizer.pad(
+                features_chosen + features_rejected,
+                padding=self.padding,
+                max_length=self.max_length,
+                pad_to_multiple_of=self.pad_to_multiple_of,
+                return_tensors=self.return_tensors,
+            )
+
+            input_ids = batch["input_ids"].view(
+                2, batch_size, batch["input_ids"].shape[-1]
+            )
+            attention_mask = batch["attention_mask"].view(
+                2, batch_size, batch["attention_mask"].shape[-1]
+            )
+
+            context_lengths = torch.cumsum(torch.tensor(contexts_lengths), dim=0)
+            seq_start_end = torch.stack(
+                [context_lengths[:-1], context_lengths[1:]], dim=1
+            )
+            user_type = [user_mapping[feature["user_type"]] for feature in features]
+            assert len(seq_start_end) == batch_size
+
+            return {
+                "input_ids_chosen": input_ids[0],
+                "attention_mask_chosen": attention_mask[0],
+                "input_ids_rejected": input_ids[1],
+                "attention_mask_rejected": attention_mask[1],
+                "contexts_embeddings_chosen": contexts_embeddings_chosen,
+                "contexts_embeddings_rejected": contexts_embeddings_rejected,
+                "seq_start_end": seq_start_end,
+                "return_loss": True,
+                "user_type": user_type,
+            }
+
+        batch_size = len(features)
+        features_chosen = []
+        features_rejected = []
+        contexts_features_chosen = []
+        contexts_features_rejected = []
+        contexts_lengths = [0]
+        for feature in features:
+            features_chosen.append(
+                {
+                    "input_ids": feature["input_ids_chosen"],
+                    "attention_mask": feature["attention_mask_chosen"],
+                }
+            )
+            features_rejected.append(
+                {
+                    "input_ids": feature["input_ids_rejected"],
+                    "attention_mask": feature["attention_mask_rejected"],
+                }
+            )
+
+            # Creating a flattened list of contexts.
+            contexts_features_chosen.extend(
+                [
+                    {
+                        "input_ids": context["input_ids_chosen"],
+                        "attention_mask": context["attention_mask_chosen"],
+                    }
+                    for context in feature["contexts_tokens"]
+                ]
+            )
+            contexts_features_rejected.extend(
+                [
+                    {
+                        "input_ids": context["input_ids_rejected"],
+                        "attention_mask": context["attention_mask_rejected"],
+                    }
+                    for context in feature["contexts_tokens"]
+                ]
+            )
+            # Keep track of the start and end of each sequence.
+            contexts_lengths.append(len(feature["contexts_tokens"]))
+
+        batch = self.tokenizer.pad(
+            features_chosen + features_rejected + contexts_features_chosen + contexts_features_rejected,
+            padding=self.padding,
+            max_length=self.max_length,
+            pad_to_multiple_of=self.pad_to_multiple_of,
+            return_tensors=self.return_tensors,
         )
-        accuracy = torch.mean((loss < np.log(2)).float())
+
+        input_ids = batch["input_ids"][:2 * batch_size].view(
+            2, batch_size, batch["input_ids"].shape[-1]
+        )
+        attention_mask = batch["attention_mask"][:2 * batch_size].view(
+            2, batch_size, batch["attention_mask"].shape[-1]
+        )
+
+        contexts_lengths = torch.cumsum(torch.tensor(contexts_lengths), dim=0)
+        seq_start_end = torch.stack(
+            [contexts_lengths[:-1], contexts_lengths[1:]], dim=1
+        )
+        user_type = [user_mapping[feature["user_type"]] for feature in features]
+        assert len(seq_start_end) == batch_size
+        context_ids = batch["input_ids"][2 * batch_size:].view(
+            2, contexts_lengths[-1], batch["input_ids"].shape[-1]
+        )
+        context_attention_mask = batch["attention_mask"][2 * batch_size:].view(
+            2, contexts_lengths[-1], batch["attention_mask"].shape[-1]
+        )
 
         return {
-            "loss": loss.mean().item(),
-            "accuracy": accuracy.item(),
-            "kld": kld.item(),
-            "total_loss": loss.mean().item() + kld.item(),
+            "input_ids_chosen": input_ids[0],
+            "attention_mask_chosen": attention_mask[0],
+            "input_ids_rejected": input_ids[1],
+            "attention_mask_rejected": attention_mask[1],
+            "contexts_input_ids_chosen": context_ids[0],
+            "contexts_attention_mask_chosen": context_attention_mask[0],
+            "contexts_input_ids_rejected": context_ids[1],
+            "contexts_attention_mask_rejected": context_attention_mask[1],
+            "seq_start_end": seq_start_end,
+            "return_loss": True,
+            "user_type": user_type,
         }
-
-def get_hh_rlhf_dataset(
-    data_subset: DataSubset,
-    split: Literal["train", "test"],
-    dataset_size: int = 0,
-    data_path="Anthropic/hh-rlhf",
-) -> Dataset:
-    datasets: List[Dataset] = []
-    if data_path == "Anthropic/hh-rlhf":
-        if data_subset == "harmless" or data_subset == "both":
-            datasets.append(
-                load_dataset(
-                    "Anthropic/hh-rlhf", data_dir="harmless-base", split=split
-                ).map(lambda data: {"data_subset": "harmless"})
-            )
-        if data_subset == "helpful" or data_subset == "both":
-            datasets.append(
-                load_dataset(
-                    "Anthropic/hh-rlhf", data_dir="helpful-base", split=split
-                ).map(lambda data: {"data_subset": "helpful"})
-            )
-    else:
-        datasets.append(
-            load_dataset(data_path, split=split).map(
-                lambda data: {"data_subset": data_subset}
-            )
-        )
-
-    if dataset_size:
-        datasets = [
-            dataset.select(range(dataset_size // len(datasets))) for dataset in datasets
-        ]
-
-    return concatenate_datasets(datasets)
-
-
-trainer_classes: Dict[RewardModelType, Type[RewardTrainer]] = {
-    "vae": RewardTrainer,
-}
 
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args: ScriptArguments = parser.parse_args_into_dataclasses()[0]
+
+    seed = script_args.seed
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+
+    torch.set_default_dtype(torch.bfloat16 if script_args.bf16 else torch.float32)
+
+    if script_args.use_causal_lm:
+        if script_args.model_name == 'gpt2':
+            script_args.embed_dim = 768
+        if script_args.model_name == 'meta-llama/Llama-2-7b-hf':
+            script_args.embed_dim = 4096
 
     data_subset = cast(DataSubset, script_args.data_subset)
     train_dataset = get_hh_rlhf_dataset(
@@ -348,6 +485,10 @@ if __name__ == "__main__":
         script_args.eval_dataset_size,
         data_path=script_args.data_path,
     )
+    print(len(train_dataset), len(eval_dataset))
+    if script_args.controversial_only:
+        train_dataset = train_dataset.filter(lambda example: example['controversial'] == True)
+        eval_dataset = eval_dataset.filter(lambda example: example['controversial'] == True)
 
     reward_model_type = cast(RewardModelType, script_args.reward_model_type)
 
@@ -380,7 +521,7 @@ if __name__ == "__main__":
         num_train_epochs=script_args.num_train_epochs,
         weight_decay=script_args.weight_decay,
         evaluation_strategy="steps",
-        eval_steps=1000,
+        eval_steps=100,
         save_strategy="steps",
         save_steps=10000,
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,
@@ -392,7 +533,7 @@ if __name__ == "__main__":
         bf16=script_args.bf16,
         fp16=script_args.fp16,
         logging_strategy="steps",
-        logging_steps=10,
+        logging_steps=100,
         optim=script_args.optim,
         lr_scheduler_type=lr_scheduler_type,
         report_to="wandb",
@@ -406,8 +547,12 @@ if __name__ == "__main__":
     )
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True)
 
+    if not script_args.use_causal_lm:
+        task_type = TaskType.SEQ_CLS
+    else:
+        task_type = TaskType.CAUSAL_LM
     peft_config = LoraConfig(
-        task_type=TaskType.SEQ_CLS,
+        task_type=task_type,
         inference_mode=False,
         r=8,
         lora_alpha=32,
@@ -419,16 +564,21 @@ if __name__ == "__main__":
     trainer_class = trainer_classes[reward_model_type]
     embed_dim = script_args.embed_dim
 
-    model = AutoModelForSequenceClassification.from_pretrained(
-        script_args.model_name, num_labels=embed_dim, torch_dtype=torch.bfloat16
-    )
-    # We multiply the final linear layer's weights by 0.01 because this seems to
-    # significantly stabilize training and lead to better optimization of the loss.
-    # model.score.weight.data *= 0.01
+    if not script_args.use_causal_lm:
+        model = AutoModelForSequenceClassification.from_pretrained(
+            script_args.model_name, num_labels=embed_dim, torch_dtype=torch.bfloat16
+        )
+        # We multiply the final linear layer's weights by 0.01 because this seems to
+        # significantly stabilize training and lead to better optimization of the loss.
+        model.score.weight.data *= 0.01
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            script_args.model_name, torch_dtype=torch.bfloat16
+        )
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
 
-    # Need to do this for GPT2 and Llama because they doesn't have official pad tokens.
+    # Need to do this for GPT2 and Llama because they don't have official pad tokens.
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.pad_token_id = tokenizer.eos_token_id
     model.config.pad_token_id = tokenizer.pad_token_id
@@ -439,76 +589,32 @@ if __name__ == "__main__":
     original_columns = train_dataset.column_names
 
     train_dataset = train_dataset.map(
-        HHRLHFPreprocessor(tokenizer),
+        HHRLHFPreprocessor(script_args, tokenizer),
         batched=True,
         num_proc=num_proc,
         remove_columns=original_columns,
     )
     train_dataset = train_dataset.filter(
-        lambda x: len(x["input_ids_chosen"]) <= script_args.max_length
-        and len(x["input_ids_rejected"]) <= script_args.max_length
+        lambda x: x["max_lengths"] <= script_args.max_length
     )
 
     eval_dataset = eval_dataset.map(
-        HHRLHFPreprocessor(tokenizer),
+        HHRLHFPreprocessor(script_args, tokenizer),
         batched=True,
         num_proc=num_proc,
         remove_columns=original_columns,
     )
     eval_dataset = eval_dataset.filter(
-        lambda x: len(x["input_ids_chosen"]) <= script_args.max_length
-        and len(x["input_ids_rejected"]) <= script_args.max_length
+        lambda x: x["max_lengths"] <= script_args.max_length
     )
-
-    # We need to define a special data collator that batches the data in our j vs k format.
-    @dataclass
-    class RewardDataCollatorWithPadding:
-        tokenizer: PreTrainedTokenizerBase
-        padding: Union[bool, str, PaddingStrategy] = True
-        max_length: Optional[int] = None
-        pad_to_multiple_of: Optional[int] = None
-        return_tensors: str = "pt"
-
-        def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
-            features_chosen = []
-            features_rejected = []
-            for feature in features:
-                features_chosen.append(
-                    {
-                        "input_ids": feature["input_ids_chosen"],
-                        "attention_mask": feature["attention_mask_chosen"],
-                    }
-                )
-                features_rejected.append(
-                    {
-                        "input_ids": feature["input_ids_rejected"],
-                        "attention_mask": feature["attention_mask_rejected"],
-                    }
-                )
-            batch = self.tokenizer.pad(
-                features_chosen + features_rejected,
-                padding=self.padding,
-                max_length=self.max_length,
-                pad_to_multiple_of=self.pad_to_multiple_of,
-                return_tensors=self.return_tensors,
-            )
-            input_ids = batch["input_ids"].view(2, -1, batch["input_ids"].shape[-1])
-            attention_mask = batch["attention_mask"].view(
-                2, -1, batch["attention_mask"].shape[-1]
-            )
-            return {
-                "input_ids_chosen": input_ids[0],
-                "attention_mask_chosen": attention_mask[0],
-                "input_ids_rejected": input_ids[1],
-                "attention_mask_rejected": attention_mask[1],
-                "return_loss": True,
-            }
 
     # Train the model.
     latent_dim = script_args.latent_dim
-    encoder = Encoder(embed_dim=embed_dim, latent_dim=latent_dim, hidden_dim=512)
-    decoder = Decoder(input_dim=(latent_dim+embed_dim), hidden_dim=512)
-    vae_model = VAEModel(encoder, decoder, model, latent_dim=latent_dim, learned_prior=False)
+    hidden_dim = script_args.hidden_dim
+    vae_model = VAEModel(embed_dim, hidden_dim, latent_dim, model,
+                         fixed_contexts=script_args.fixed_contexts,
+                         fixed_llm_embeddings=script_args.fixed_llm_embeddings,
+                         use_causal_lm=script_args.use_causal_lm,)
 
     trainer = trainer_class(
         model=vae_model,
@@ -517,6 +623,7 @@ if __name__ == "__main__":
         eval_dataset=eval_dataset,
         compute_metrics=trainer_class.compute_metrics,
         data_collator=RewardDataCollatorWithPadding(
+            args=script_args,
             tokenizer=tokenizer,
             max_length=script_args.max_length,
             pad_to_multiple_of=64,
@@ -533,8 +640,6 @@ if __name__ == "__main__":
     model.save_pretrained(output_name + "_peft_last_checkpoint")
     output_name += "_peft_last_checkpoint"
     os.makedirs(output_name, exist_ok=True)
-    torch.save(vae_model.Encoder.state_dict(), f"{output_name}/final_vae_model_encoder_state_dict.pt")
-    torch.save(vae_model.Decoder.state_dict(), f"{output_name}/final_vae_model_decoder_state_dict.pt")
-    torch.save(vae_model.prior_mean, f"{output_name}/final_vae_model_mean_state_dict.pt")
-    torch.save(vae_model.prior_log_var, f"{output_name}/final_vae_model_log_var_state_dict.pt")
-    torch.save(vae_model, f"{output_name}/final_vae_model.pt")
+
+    output_name = os.path.join(output_name, "model.pt")
+    vae_model.save_model(output_name)

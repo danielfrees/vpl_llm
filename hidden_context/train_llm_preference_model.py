@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Dict, List, Optional, Type, Union, cast
 
+import wandb
 import numpy as np
 import torch
 import torch.nn.functional as F  # noqa: N812
@@ -20,6 +21,14 @@ from transformers import (
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import PaddingStrategy
 from typing_extensions import Literal, TypeAlias
+
+import sys, ipdb, traceback
+
+def info(type, value, tb):
+    traceback.print_exception(type, value, tb)
+    ipdb.pm()
+
+sys.excepthook = info
 
 RewardModelType: TypeAlias = Literal["base", "mean_and_variance", "categorical"]
 DataSubset: TypeAlias = Literal["both", "helpful", "harmless"]
@@ -99,7 +108,7 @@ class ScriptArguments:
         },
     )
     fp16: bool = field(
-        default=True,
+        default=False,
         metadata={
             "help": "This essentially cuts the training time in half if you want to "
             "sacrifice a little precision and have a supported GPU."
@@ -320,7 +329,7 @@ def get_hh_rlhf_dataset(
     split: Literal["train", "test"],
     dataset_size: int = 0,
     data_path="Anthropic/hh-rlhf",
-    use_subset_as_dir=False     # new parameter
+    use_subset_as_dir=True     # new parameter
 ) -> Dataset:
     datasets: List[Dataset] = []
     if data_path == "Anthropic/hh-rlhf":
@@ -344,9 +353,18 @@ def get_hh_rlhf_dataset(
                 )
             )
         else:                           # new version: use data_subset as subdirectory
-            datasets.append(
-                load_dataset(data_path, data_dir=data_subset, split=split)
-            )
+            if data_subset == "helpful" or data_subset == "both":
+                datasets.append(
+                    load_dataset(
+                        data_path, data_dir="helpful", split=split
+                    ).map(lambda data: {"data_subset": "helpful"})
+                )
+            if data_subset == "harmless" or data_subset == "both":
+                datasets.append(
+                    load_dataset(
+                        data_path, data_dir="harmless", split=split
+                    ).map(lambda data: {"data_subset": "harmless"})
+                )
 
     if dataset_size:
         datasets = [
@@ -373,13 +391,17 @@ if __name__ == "__main__":
         "train",
         script_args.train_dataset_size,
         data_path=script_args.data_path,
+        use_subset_as_dir=True
     )
+    print(len(train_dataset))
     eval_dataset = get_hh_rlhf_dataset(
         data_subset,
         "test",
         script_args.eval_dataset_size,
         data_path=script_args.data_path,
+        use_subset_as_dir=True
     )
+    print(len(eval_dataset))
 
     reward_model_type = cast(RewardModelType, script_args.reward_model_type)
 
@@ -490,6 +512,7 @@ if __name__ == "__main__":
         lambda x: len(x["input_ids_chosen"]) <= script_args.max_length
         and len(x["input_ids_rejected"]) <= script_args.max_length
     )
+    print(len(train_dataset))
 
     eval_dataset = eval_dataset.map(
         HHRLHFPreprocessor(tokenizer),
@@ -501,6 +524,7 @@ if __name__ == "__main__":
         lambda x: len(x["input_ids_chosen"]) <= script_args.max_length
         and len(x["input_ids_rejected"]) <= script_args.max_length
     )
+    print(len(eval_dataset))
 
     # We need to define a special data collator that batches the data in our j vs k format.
     @dataclass
