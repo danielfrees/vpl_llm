@@ -23,6 +23,7 @@ from .train_llm_preference_model import (
     RewardModelType,
     DataSubset,
     get_hh_rlhf_dataset,
+    concatenate_datasets
 )
 
 import sys, ipdb, traceback
@@ -156,6 +157,7 @@ class ScriptArguments:
     fixed_llm_embeddings: bool = field(default=False)
     seed: int = field(default=0)
     use_causal_lm: bool = field(default=False)
+    up_sampling: bool = field(default=False)
 
 
 class HHRLHFPreprocessor(object):
@@ -454,6 +456,13 @@ class RewardDataCollatorWithPadding:
         }
 
 
+def up_sample_controversial(dataset, seed):
+    cont = dataset.filter(lambda example: example['controversial'] == True)
+    up_sampled_dataset = concatenate_datasets([cont] * 4 + [dataset])
+    up_sampled_dataset = up_sampled_dataset.shuffle(seed=seed)
+    return up_sampled_dataset
+
+
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args: ScriptArguments = parser.parse_args_into_dataclasses()[0]
@@ -489,6 +498,8 @@ if __name__ == "__main__":
     if script_args.controversial_only:
         train_dataset = train_dataset.filter(lambda example: example['controversial'] == True)
         eval_dataset = eval_dataset.filter(lambda example: example['controversial'] == True)
+    elif script_args.up_sampling:
+        train_dataset = up_sample_controversial(train_dataset, seed)
 
     reward_model_type = cast(RewardModelType, script_args.reward_model_type)
 
@@ -521,7 +532,7 @@ if __name__ == "__main__":
         num_train_epochs=script_args.num_train_epochs,
         weight_decay=script_args.weight_decay,
         evaluation_strategy="steps",
-        eval_steps=100,
+        eval_steps=1000,
         save_strategy="steps",
         save_steps=10000,
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,

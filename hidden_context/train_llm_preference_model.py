@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Type, Union, cast
 import wandb
 import numpy as np
 import torch
+import random
 import torch.nn.functional as F  # noqa: N812
 from datasets import Dataset, concatenate_datasets, load_dataset
 from peft import LoraConfig, TaskType, get_peft_model
@@ -24,9 +25,11 @@ from typing_extensions import Literal, TypeAlias
 
 import sys, ipdb, traceback
 
+
 def info(type, value, tb):
     traceback.print_exception(type, value, tb)
     ipdb.pm()
+
 
 sys.excepthook = info
 
@@ -144,6 +147,9 @@ class ScriptArguments:
         metadata={"help": "Whether to run eval after the first step"},
     )
     log_dir: str = field(default="data/reward_models/hh_rlhf")
+    controversial_only: bool = field(default=False)
+    seed: int = field(default=0)
+    up_sampling: bool = field(default=False)
 
 
 class HHRLHFPreprocessor(object):
@@ -225,6 +231,13 @@ class RewardTrainer(Trainer):
                 "rewards_chosen": rewards_chosen,
                 "rewards_rejected": rewards_rejected,
             }
+        else:
+            self.log(
+                {
+                    "rewards_chosen": rewards_chosen.mean().item(),
+                    "rewards_rejected": rewards_rejected.mean().item(),
+                }
+            )
         return loss
 
     def create_scheduler(self, num_training_steps: int, optimizer=None):
@@ -381,9 +394,24 @@ trainer_classes: Dict[RewardModelType, Type[RewardTrainer]] = {
 }
 
 
+def up_sample_controversial(dataset, seed):
+    cont = dataset.filter(lambda example: example['controversial'] == True)
+    up_sampled_dataset = concatenate_datasets([cont] * 4 + [dataset])
+    up_sampled_dataset = up_sampled_dataset.shuffle(seed=seed)
+    return up_sampled_dataset
+
+
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args: ScriptArguments = parser.parse_args_into_dataclasses()[0]
+
+    seed = script_args.seed
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+
+    torch.set_default_dtype(torch.bfloat16 if script_args.bf16 else torch.float32)
 
     data_subset = cast(DataSubset, script_args.data_subset)
     train_dataset = get_hh_rlhf_dataset(
@@ -393,7 +421,6 @@ if __name__ == "__main__":
         data_path=script_args.data_path,
         use_subset_as_dir=True
     )
-    print(len(train_dataset))
     eval_dataset = get_hh_rlhf_dataset(
         data_subset,
         "test",
@@ -401,7 +428,12 @@ if __name__ == "__main__":
         data_path=script_args.data_path,
         use_subset_as_dir=True
     )
-    print(len(eval_dataset))
+    print(len(train_dataset), len(eval_dataset))
+    if script_args.controversial_only:
+        train_dataset = train_dataset.filter(lambda example: example['controversial'] == True)
+        eval_dataset = eval_dataset.filter(lambda example: example['controversial'] == True)
+    elif script_args.up_sampling:
+        train_dataset = up_sample_controversial(train_dataset, seed)
 
     reward_model_type = cast(RewardModelType, script_args.reward_model_type)
 

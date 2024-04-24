@@ -119,6 +119,7 @@ def generate_embeddings_with_llm(args, input_dataset=None):
             model = AutoModelForSequenceClassification.from_pretrained(
                 "gpt2", num_labels=args.embed_dim, torch_dtype=torch.bfloat16
             )
+            model.score.weight.data *= 0.01
         else:
             model = AutoModelForCausalLM.from_pretrained(
                 "gpt2", torch_dtype=torch.bfloat16
