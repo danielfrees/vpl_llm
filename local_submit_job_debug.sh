@@ -74,11 +74,11 @@ model_name='gpt2'
 #model_type=$1
 #python -m hidden_context.train_llm_preference_model \
 #        --model_name=${model_name} \
-#        --data_path="data/simple_pets_0_01/gpt2" \
+#        --data_path="data/relabeled_hh_rlhf_in_context_fixed/gpt2" \
 #        --num_train_epochs=1 \
 #        --reward_model_type=${model_type} \
 #        --data_subset=both \
-#        --log_dir="logs/gpt2_simple_pets_0_01" \
+#        --log_dir="logs/gpt2_relabeled_hh_rlhf" \
 #        --bf16 True \
 #        --fp16 False \
 #        --learning_rate 1e-4 \
