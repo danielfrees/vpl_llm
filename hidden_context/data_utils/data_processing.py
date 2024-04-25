@@ -124,7 +124,7 @@ def generate_embeddings_with_llm(args, input_dataset=None):
             model = AutoModelForCausalLM.from_pretrained(
                 "gpt2", torch_dtype=torch.bfloat16
             )
-    elif args.model_type == "llama":
+    elif args.model_type == "llama" or args.model_type == "meta-llama/Llama-2-7b-hf":
         tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf", use_auth_token=True)
         if not args.use_causal_lm:
             model = AutoModelForSequenceClassification.from_pretrained(

@@ -461,6 +461,10 @@ if __name__ == "__main__":
     else:
         lr_scheduler_type = script_args.lr_scheduler_type
 
+    if len(train_dataset) <= 4000:
+        eval_steps = 20
+    else:
+        eval_steps = 1000
     training_args = TrainingArguments(
         output_dir=output_name,
         learning_rate=script_args.learning_rate,
@@ -469,7 +473,7 @@ if __name__ == "__main__":
         num_train_epochs=script_args.num_train_epochs,
         weight_decay=script_args.weight_decay,
         evaluation_strategy="steps",
-        eval_steps=1000,
+        eval_steps=eval_steps,
         save_strategy="steps",
         save_steps=1000,
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,
