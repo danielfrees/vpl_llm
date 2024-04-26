@@ -97,6 +97,7 @@ class ScriptArguments:
         }
     )
     use_causal_lm: bool = field(default=False)
+    other_subsets: str = field(default=None)
 
 
 def generate_embeddings_with_llm(args, input_dataset=None):
@@ -110,7 +111,8 @@ def generate_embeddings_with_llm(args, input_dataset=None):
             args.data_split,
             args.dataset_size,
             data_path=args.data_path,
-            use_subset_as_dir=True
+            use_subset_as_dir=True,
+            other_subsets=args.other_subsets,
         )
 
     if args.model_type == "gpt2":

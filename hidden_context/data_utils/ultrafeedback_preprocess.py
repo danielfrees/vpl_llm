@@ -49,6 +49,8 @@ def inner_join(original, binarized):
         prompt = binarized[bin_idx]['prompt']
         chosen = binarized[bin_idx]['chosen'][1]['content']
         rejected = binarized[bin_idx]['rejected'][1]['content']
+        if chosen == '' or rejected == '':
+            continue
         chosen_ratings = dict()
         rejected_ratings = dict()
         flag = True
