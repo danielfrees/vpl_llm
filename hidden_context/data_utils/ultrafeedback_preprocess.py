@@ -1,4 +1,4 @@
-from random import random
+import random
 
 from datasets import load_dataset, Dataset
 import numpy as np
