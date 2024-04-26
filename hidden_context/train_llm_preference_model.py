@@ -150,6 +150,7 @@ class ScriptArguments:
     controversial_only: bool = field(default=False)
     seed: int = field(default=0)
     up_sampling: bool = field(default=False)
+    other_subsets: str = field(default=None)
 
 
 class HHRLHFPreprocessor(object):
@@ -342,41 +343,55 @@ def get_hh_rlhf_dataset(
     split: Literal["train", "test"],
     dataset_size: int = 0,
     data_path="Anthropic/hh-rlhf",
-    use_subset_as_dir=True     # new parameter
+    use_subset_as_dir=True,     # new parameter
+    other_subsets=None
 ) -> Dataset:
     datasets: List[Dataset] = []
-    if data_path == "Anthropic/hh-rlhf":
-        if data_subset == "harmless" or data_subset == "both":
-            datasets.append(
-                load_dataset(
-                    "Anthropic/hh-rlhf", data_dir="harmless-base", split=split
-                ).map(lambda data: {"data_subset": "harmless"})
-            )
-        if data_subset == "helpful" or data_subset == "both":
-            datasets.append(
-                load_dataset(
-                    "Anthropic/hh-rlhf", data_dir="helpful-base", split=split
-                ).map(lambda data: {"data_subset": "helpful"})
-            )
-    else:
-        if not use_subset_as_dir:       # original version: combine all data subsets within the path
-            datasets.append(
-                load_dataset(data_path, split=split).map(
-                    lambda data: {"data_subset": data_subset}
-                )
-            )
-        else:                           # new version: use data_subset as subdirectory
-            if data_subset == "helpful" or data_subset == "both":
-                datasets.append(
-                    load_dataset(
-                        data_path, data_dir="helpful", split=split
-                    ).map(lambda data: {"data_subset": "helpful"})
-                )
+    if other_subsets is None:
+        if data_path == "Anthropic/hh-rlhf":
             if data_subset == "harmless" or data_subset == "both":
                 datasets.append(
                     load_dataset(
-                        data_path, data_dir="harmless", split=split
+                        "Anthropic/hh-rlhf", data_dir="harmless-base", split=split
                     ).map(lambda data: {"data_subset": "harmless"})
+                )
+            if data_subset == "helpful" or data_subset == "both":
+                datasets.append(
+                    load_dataset(
+                        "Anthropic/hh-rlhf", data_dir="helpful-base", split=split
+                    ).map(lambda data: {"data_subset": "helpful"})
+                )
+        else:
+            if not use_subset_as_dir:  # original version: combine all data subsets within the path
+                datasets.append(
+                    load_dataset(data_path, split=split).map(
+                        lambda data: {"data_subset": data_subset}
+                    )
+                )
+            else:  # new version: use data_subset as subdirectory
+                if data_subset == "helpful" or data_subset == "both":
+                    datasets.append(
+                        load_dataset(
+                            data_path, data_dir="helpful", split=split
+                        ).map(lambda data: {"data_subset": "helpful"})
+                    )
+                if data_subset == "harmless" or data_subset == "both":
+                    datasets.append(
+                        load_dataset(
+                            data_path, data_dir="harmless", split=split
+                        ).map(lambda data: {"data_subset": "harmless"})
+                    )
+    else:   # TODO: set subsets here
+        if other_subsets == 'ultra_feedback':
+            subsets = ['helpfulness', 'honesty', 'instruction_following', 'truthfulness']
+        else:
+            subsets = []
+        for subset in subsets:
+            if data_subset == 'all' or data_subset == subset:
+                datasets.append(
+                    load_dataset(
+                        data_path, data_dir=subset, split=split
+                    )
                 )
 
     if dataset_size:
@@ -419,14 +434,16 @@ if __name__ == "__main__":
         "train",
         script_args.train_dataset_size,
         data_path=script_args.data_path,
-        use_subset_as_dir=True
+        use_subset_as_dir=True,
+        other_subsets=script_args.other_subsets
     )
     eval_dataset = get_hh_rlhf_dataset(
         data_subset,
         "test",
         script_args.eval_dataset_size,
         data_path=script_args.data_path,
-        use_subset_as_dir=True
+        use_subset_as_dir=True,
+        other_subsets=script_args.other_subsets
     )
     print(len(train_dataset), len(eval_dataset))
     if script_args.controversial_only:

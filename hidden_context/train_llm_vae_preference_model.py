@@ -158,6 +158,7 @@ class ScriptArguments:
     seed: int = field(default=0)
     use_causal_lm: bool = field(default=False)
     up_sampling: bool = field(default=False)
+    other_subsets: str = field(default=None)
 
 
 class HHRLHFPreprocessor(object):
@@ -259,10 +260,17 @@ class RewardDataCollatorWithPadding:
     return_tensors: str = "pt"
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
-        user_mapping = {
-            "helpful": 0,
-            "harmless": 1,
-        }
+        if self.args.other_subsets is None:
+            user_mapping = {
+                "helpful": 0,
+                "harmless": 1,
+            }
+        else:   # TODO: set subsets here
+            if self.args.other_subsets == 'ultra_feedback':
+                subsets = ['helpfulness', 'honesty', 'instruction_following', 'truthfulness']
+            else:
+                subsets = []
+            user_mapping = {subset: idx for idx, subset in enumerate(subsets)}
         if self.args.fixed_llm_embeddings:
             batch_size = len(features)
             embeddings_chosen = []
@@ -487,12 +495,14 @@ if __name__ == "__main__":
         "train",
         script_args.train_dataset_size,
         data_path=script_args.data_path,
+        other_subsets=script_args.other_subsets
     )
     eval_dataset = get_hh_rlhf_dataset(
         data_subset,
         "test",
         script_args.eval_dataset_size,
         data_path=script_args.data_path,
+        other_subsets=script_args.other_subsets
     )
     print(len(train_dataset), len(eval_dataset))
     if script_args.controversial_only:
