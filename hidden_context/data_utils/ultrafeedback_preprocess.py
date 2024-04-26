@@ -1,3 +1,5 @@
+from random import random
+
 from datasets import load_dataset, Dataset
 import numpy as np
 import os
@@ -82,6 +84,10 @@ def inner_join(original, binarized):
 
 
 if __name__ == '__main__':
+    seed = 0
+    random.seed(seed)
+    np.random.seed(seed)
+
     ultra_feedback = load_dataset('openbmb/UltraFeedback')
     binarized_cleaned = load_dataset('argilla/ultrafeedback-binarized-preferences-cleaned')
     print(len(binarized_cleaned['train']))
