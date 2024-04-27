@@ -78,8 +78,8 @@ def inner_join(original, binarized):
         data_subset = get_user_type(chosen_ratings, rejected_ratings)
         dataset_dict['Index'].append(out_idx)
         dataset_dict['prompt'].append(prompt)
-        dataset_dict['chosen'].append(chosen)
-        dataset_dict['rejected'].append(rejected)
+        dataset_dict['chosen'].append('Human: ' + prompt + '\n\nAssistant: ' + chosen)
+        dataset_dict['rejected'].append('Human: ' + prompt + '\n\nAssistant: ' + rejected)
         dataset_dict['data_subset'].append(data_subset)
         out_idx += 1
     return Dataset.from_dict(dataset_dict)
