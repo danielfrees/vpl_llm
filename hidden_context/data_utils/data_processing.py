@@ -2,6 +2,7 @@
 import os
 from dataclasses import dataclass, field
 from typing import Optional, cast
+from tqdm import tqdm
 
 from transformers import (
     HfArgumentParser,
@@ -167,7 +168,7 @@ def generate_embeddings_with_llm(args, input_dataset=None):
     dataset_size = len(preprocessed_dataset)
 
     embeddings = list()
-    for row_id in range(dataset_size):
+    for row_id in tqdm(range(dataset_size)):
         emb = dict()
         for key in ['chosen', 'rejected']:
             tokens = tokenizer.pad(
@@ -193,8 +194,6 @@ def generate_embeddings_with_llm(args, input_dataset=None):
                     mean_pooling = torch.sum(masked_last_hidden_state, dim=1) / token_length
                     emb[f"embedding_{key}"] = mean_pooling[0].float().cpu().numpy()
         embeddings.append(emb)
-        if row_id % 100 == 0:
-            print(row_id)
     output_dataset = input_dataset.add_column("embeddings", embeddings)
     return output_dataset
 

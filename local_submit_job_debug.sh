@@ -112,18 +112,58 @@ model_name='gpt2'
 
 
 # Train Dylan's models on UltraFeedback dataset
+#model_type=$1
+#python -m hidden_context.train_llm_preference_model \
+#        --model_name=${model_name} \
+#        --data_path="data/UltraFeedback_in_context_fixed/gpt2" \
+#        --num_train_epochs=1 \
+#        --reward_model_type=${model_type} \
+#        --data_subset=all \
+#        --log_dir="logs/gpt2_UltraFeedback" \
+#        --bf16 True \
+#        --fp16 False \
+#        --learning_rate 1e-4 \
+#        --controversial_only False \
+#        --up_sampling False \
+#        --other_subsets ultra_feedback \
+#        --seed 0
+
+
+# Train VPL on UltraFeedback dataset
+#python -m hidden_context.train_llm_vae_preference_model \
+#        --model_name=${model_name} \
+#        --data_path="data/UltraFeedback_pos_neg_in_context_fixed/gpt2" \
+#        --num_train_epochs=1 \
+#        --reward_model_type=vae \
+#        --data_subset=all \
+#        --log_dir="logs/gpt2_UltraFeedback_pos_neg" \
+#        --bf16 True \
+#        --fp16 False \
+#        --learning_rate 1e-4 \
+#        --use_annealing True \
+#        --kl_loss_weight 1e-6 \
+#        --controversial_only False \
+#        --fixed_contexts True \
+#        --fixed_llm_embeddings False \
+#        --use_causal_lm False \
+#        --up_sampling False \
+#        --other_subsets pos_neg \
+#        --seed 0
+
+
+# Train Dylan's models on UltraFeedback dataset
 model_type=$1
 python -m hidden_context.train_llm_preference_model \
         --model_name=${model_name} \
-        --data_path="data/UltraFeedback_in_context_fixed/gpt2" \
+        --data_path="data/UltraFeedback_pos_neg_in_context_fixed/gpt2" \
         --num_train_epochs=1 \
         --reward_model_type=${model_type} \
         --data_subset=all \
-        --log_dir="logs/gpt2_UltraFeedback" \
+        --log_dir="logs/gpt2_UltraFeedback_pos_neg" \
         --bf16 True \
         --fp16 False \
         --learning_rate 1e-4 \
         --controversial_only False \
         --up_sampling False \
-        --other_subsets ultra_feedback \
+        --other_subsets pos_neg \
         --seed 0

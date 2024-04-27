@@ -268,6 +268,12 @@ class RewardDataCollatorWithPadding:
         else:   # TODO: set subsets here
             if self.args.other_subsets == 'ultra_feedback':
                 subsets = ['helpfulness', 'honesty', 'instruction_following', 'truthfulness']
+            elif self.args.other_subsets == 'pos_neg':
+                subsets = [str(i) for i in range(16)]
+            elif self.args.other_subsets == 'set':
+                subsets = [str(i) for i in range(1, 16)]
+            elif self.args.other_subsets == 'single':
+                subsets = ['8', '4', '2', '1']
             else:
                 subsets = []
             user_mapping = {subset: idx for idx, subset in enumerate(subsets)}
