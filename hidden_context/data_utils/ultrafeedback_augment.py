@@ -39,9 +39,14 @@ def get_user_type(chosen_ratings, rejected_ratings, augment_type, users):
     chosen_values = np.asarray(chosen_rating_values)
     rejected_values = np.asarray(rejected_chosen_values)
     if augment_type == 'single':
-        pass
+        data_subsets = ['8', '4', '2', '1']
+        reversed_labels = list(random_greater_than_zero(rejected_values - chosen_values))
+        return data_subsets, reversed_labels
     elif augment_type == 'set':
-        pass
+        data_subsets = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15']
+        preferences = np.array([users[user] for user in data_subsets])
+        reversed_labels = list(random_greater_than_zero(np.dot(preferences, rejected_values - chosen_values)))
+        return data_subsets, reversed_labels
     elif augment_type == 'pos_neg':
         user_orig = np.ones(4, dtype=int) * (random_greater_than_zero(chosen_values - rejected_values))
         user_rev = 1 - user_orig
