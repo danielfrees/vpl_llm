@@ -543,7 +543,7 @@ if __name__ == "__main__":
     if len(train_dataset) <= 4000:
         eval_steps = 20
     else:
-        eval_steps = 1000
+        eval_steps = 4000
     training_args = TrainingArguments(
         output_dir=output_name,
         learning_rate=script_args.learning_rate,

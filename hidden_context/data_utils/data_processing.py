@@ -175,15 +175,23 @@ def generate_embeddings_with_llm(args, input_dataset=None):
                 {"input_ids": preprocessed_dataset[row_id][f"input_ids_{key}"]},
                 padding=True, pad_to_multiple_of=64, return_tensors="pt"
             )
+            token_length = len(preprocessed_dataset[row_id][f"input_ids_{key}"])
+            input_ids = tokens["input_ids"].unsqueeze(0).to("cuda")
+            attention_mask = tokens["attention_mask"].unsqueeze(0).to("cuda")
             with torch.no_grad():
                 if not args.use_causal_lm:
-                    emb[f"embedding_{key}"] = model(
-                        input_ids=tokens["input_ids"].unsqueeze(0).to("cuda"),
-                        attention_mask=tokens["attention_mask"].unsqueeze(0).to("cuda")
-                    )[0][0].float().cpu().numpy()
+                    # emb[f"embedding_{key}"] = model(
+                    #     input_ids=input_ids,
+                    #     attention_mask=attention_mask
+                    # )[0][0].float().cpu().numpy()
+                    # import ipdb; ipdb.set_trace()
+                    last_hidden_state = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        output_hidden_states=True
+                    ).hidden_states[-1]
+                    emb[f"embedding_{key}"] = last_hidden_state[0][token_length - 1]
                 else:
-                    input_ids = tokens["input_ids"].unsqueeze(0).to("cuda")
-                    attention_mask = tokens["attention_mask"].unsqueeze(0).to("cuda")
                     last_hidden_state = model(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
