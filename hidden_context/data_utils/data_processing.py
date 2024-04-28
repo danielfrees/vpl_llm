@@ -190,7 +190,7 @@ def generate_embeddings_with_llm(args, input_dataset=None):
                         attention_mask=attention_mask,
                         output_hidden_states=True
                     ).hidden_states[-1]
-                    emb[f"embedding_{key}"] = last_hidden_state[0][token_length - 1]
+                    emb[f"embedding_{key}"] = last_hidden_state[0][token_length - 1].float().cpu().numpy()
                 else:
                     last_hidden_state = model(
                         input_ids=input_ids,

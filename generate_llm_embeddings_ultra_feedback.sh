@@ -1,7 +1,8 @@
 
-# Set model_type to be 'gpt2' or 'llama' here
-model_type="gpt2"
-other_subsets="pos_neg"
+# Set model_type to be 'gpt2' or 'llama' for model_type
+# Set other_subsets to be 'ultra_feedback', 'pos_neg', 'set', or 'single'
+model_type=$1
+other_subsets=$2
 
 # Generate LLM embeddings for UltraFeedback dataset
 if [ "${other_subsets}" = "ultra_feedback" ]; then
