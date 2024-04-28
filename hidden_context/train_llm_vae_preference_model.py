@@ -489,11 +489,11 @@ if __name__ == "__main__":
 
     torch.set_default_dtype(torch.bfloat16 if script_args.bf16 else torch.float32)
 
-    if script_args.use_causal_lm:
-        if script_args.model_name == 'gpt2':
-            script_args.embed_dim = 768
-        if script_args.model_name == 'meta-llama/Llama-2-7b-hf':
-            script_args.embed_dim = 4096
+    # if script_args.use_causal_lm:
+    if script_args.model_name == 'gpt2':
+        script_args.embed_dim = 768
+    if script_args.model_name == 'meta-llama/Llama-2-7b-hf':
+        script_args.embed_dim = 4096
 
     data_subset = cast(DataSubset, script_args.data_subset)
     train_dataset = get_hh_rlhf_dataset(
