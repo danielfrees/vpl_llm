@@ -219,33 +219,38 @@ def generate_contexts(args, input_dataset):
     K = 1  # repeat samples for K times
     dataset_list = list()
     for idx in range(K):
-        print(idx)
         context_dataset = deepcopy(input_dataset)
         context_lengths = np.random.randint(1, 5, size=dataset_size).tolist()
         context_dataset = context_dataset.add_column("context_length", context_lengths)
         contexts = list()
-        for row_id in range(dataset_size):  # iterate over all samples in original dataset
+        for row_id in tqdm(range(dataset_size)):  # iterate over all samples in original dataset
             row_contexts = list()
             num_context = 0
+            controversial_subset = input_dataset.filter(lambda example: example['controversial'] == True)
+            controversial_size = len(controversial_subset)
             while num_context < context_lengths[row_id]:
-                context_id = np.random.randint(dataset_size)  # sample a context from the original dataset
-                if not args.synthetic_dataset:
-                    if input_dataset[row_id]['prompt'] == input_dataset[context_id]['prompt']:
-                        continue
                 if args.add_controversial:
-                    if not input_dataset[context_id]['controversial']:
+                    random_id = np.random.randint(controversial_size)
+                    context_id = controversial_subset[random_id]['Index']
+                    context_data = controversial_subset[random_id]
+                else:
+                    random_id = np.random.randint(dataset_size)    # sample a context from the original dataset
+                    context_id = input_dataset[random_id]['Index']
+                    context_data = input_dataset[context_id]
+                if not args.synthetic_dataset:
+                    if input_dataset[row_id]['prompt'] == context_data['prompt']:
                         continue
                 if not args.with_embeddings:
                     row_contexts.append({
                         'original_id': context_id,
-                        'chosen': input_dataset[context_id]['chosen'],
-                        'rejected': input_dataset[context_id]['rejected'],
+                        'chosen': context_data['chosen'],
+                        'rejected': context_data['rejected'],
                     })
                 else:
                     row_contexts.append({
                         'original_id': context_id,
-                        'embedding_chosen': input_dataset[context_id]['embeddings']['embedding_chosen'],
-                        'embedding_rejected': input_dataset[context_id]['embeddings']['embedding_rejected'],
+                        'embedding_chosen': context_data['embeddings']['embedding_chosen'],
+                        'embedding_rejected': context_data['embeddings']['embedding_rejected'],
                     })
                 num_context += 1
             contexts.append(row_contexts)

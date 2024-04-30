@@ -140,10 +140,12 @@ python -m hidden_context.train_llm_vae_preference_model \
         --log_dir="logs/gpt2_UltraFeedback_${augment_type}" \
         --bf16 True \
         --fp16 False \
-        --learning_rate 1e-5 \
+        --per_device_train_batch_size 4 \
+        --gradient_accumulation_steps 2 \
+        --learning_rate 3e-4 \
         --use_annealing True \
         --kl_loss_weight 1e-4 \
-        --controversial_only False \
+        --controversial_only True \
         --fixed_contexts True \
         --fixed_llm_embeddings False \
         --use_causal_lm False \
@@ -163,7 +165,7 @@ python -m hidden_context.train_llm_vae_preference_model \
 #        --log_dir="logs/gpt2_UltraFeedback_${augment_type}" \
 #        --bf16 True \
 #        --fp16 False \
-#        --learning_rate 1e-4 \
+#        --learning_rate 3e-4 \
 #        --controversial_only False \
 #        --up_sampling False \
 #        --other_subsets ${augment_type} \

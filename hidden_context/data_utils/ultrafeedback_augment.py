@@ -56,10 +56,10 @@ def get_user_type(chosen_ratings, rejected_ratings, augment_type, users):
     else:
         raise ValueError('Invalid augment_type')
 
-    return keys[random_argmax(chosen_values - rejected_values)]
-
 
 def inner_join(original, binarized, augment_type, users):
+    controversial_counter = 0
+    reversed_counter = 0
     keys = ['helpfulness', 'honesty', 'instruction_following', 'truthfulness']
     orig_idx = 0
     out_idx = 0
@@ -69,6 +69,8 @@ def inner_join(original, binarized, augment_type, users):
         'chosen': list(),
         'rejected': list(),
         'data_subset': list(),
+        'controversial': list(),
+        'reversed': list(),
     }
     for bin_idx in range(len(binarized)):
         while binarized[bin_idx]['prompt'] != original[orig_idx]['instruction']:
@@ -112,7 +114,14 @@ def inner_join(original, binarized, augment_type, users):
                 dataset_dict['chosen'].append('Human: ' + prompt + '\n\nAssistant: ' + rejected)
                 dataset_dict['rejected'].append('Human: ' + prompt + '\n\nAssistant: ' + chosen)
             dataset_dict['data_subset'].append(data_subset)
+            dataset_dict['controversial'].append(True in reversed_labels)
+            dataset_dict['reversed'].append(reversed_labels[idx])
+            if True in reversed_labels:
+                controversial_counter += 1
+            if reversed_labels[idx]:
+                reversed_counter += 1
             out_idx += 1
+    print(out_idx, controversial_counter, reversed_counter)
     return Dataset.from_dict(dataset_dict)
 
 

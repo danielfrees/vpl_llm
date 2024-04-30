@@ -27,9 +27,9 @@ for subset in ${subsets}
 do
     python -m hidden_context.data_utils.data_processing --output_dir "data/UltraFeedback${postfix}_in_context_fixed/" \
     --data_path "data/UltraFeedback${postfix}" --data_subset ${subset} --data_split test --model_type ${model_type} \
-    --other_subsets ${other_subsets}
+    --other_subsets ${other_subsets} --add_controversial True
 
     python -m hidden_context.data_utils.data_processing --output_dir "data/UltraFeedback${postfix}_in_context_fixed/" \
     --data_path "data/UltraFeedback${postfix}" --data_subset ${subset} --data_split train --model_type ${model_type} \
-    --other_subsets ${other_subsets}
+    --other_subsets ${other_subsets} --add_controversial True
 done
