@@ -159,6 +159,7 @@ class ScriptArguments:
     use_causal_lm: bool = field(default=False)
     up_sampling: bool = field(default=False)
     other_subsets: str = field(default=None)
+    use_last_token_embedding: bool = field(default=False)
 
 
 class HHRLHFPreprocessor(object):
@@ -489,11 +490,11 @@ if __name__ == "__main__":
 
     torch.set_default_dtype(torch.bfloat16 if script_args.bf16 else torch.float32)
 
-    # if script_args.use_causal_lm:
-    if script_args.model_name == 'gpt2':
-        script_args.embed_dim = 768
-    if script_args.model_name == 'meta-llama/Llama-2-7b-hf':
-        script_args.embed_dim = 4096
+    if script_args.use_causal_lm or script_args.use_last_token_embedding:
+        if script_args.model_name == 'gpt2':
+            script_args.embed_dim = 768
+        if script_args.model_name == 'meta-llama/Llama-2-7b-hf':
+            script_args.embed_dim = 4096
 
     data_subset = cast(DataSubset, script_args.data_subset)
     train_dataset = get_hh_rlhf_dataset(
@@ -543,7 +544,7 @@ if __name__ == "__main__":
     if len(train_dataset) <= 4000:
         eval_steps = 20
     else:
-        eval_steps = 4000
+        eval_steps = 1000
     training_args = TrainingArguments(
         output_dir=output_name,
         learning_rate=script_args.learning_rate,
