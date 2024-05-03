@@ -160,6 +160,7 @@ class ScriptArguments:
     up_sampling: bool = field(default=False)
     other_subsets: str = field(default=None)
     use_last_token_embedding: bool = field(default=False)
+    one_user: str = field(default=None)
 
 
 class HHRLHFPreprocessor(object):
@@ -200,10 +201,16 @@ class HHRLHFPreprocessor(object):
             new_examples["contexts_embeddings"] = []
         else:
             new_examples["contexts_tokens"] = []
-        for chosen, rejected, contexts in zip(
-                examples["chosen"], examples["rejected"], examples["contexts"]
+        for chosen, rejected, contexts, user_type in zip(
+                examples["chosen"], examples["rejected"], examples["contexts"], examples["data_subset"]
         ):
             max_length = 0
+            # mapping = {
+            #     "helpful": "[This is User A] ",
+            #     "harmless": "[This is User B] ",
+            # }
+            # chosen = mapping[user_type] + chosen
+            # rejected = mapping[user_type] + rejected
             tokenized_chosen = self.tokenizer(chosen, **self.tokenizer_kwargs)
             tokenized_rejected = self.tokenizer(rejected, **self.tokenizer_kwargs)
             new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
@@ -518,6 +525,9 @@ if __name__ == "__main__":
     elif script_args.up_sampling:
         train_dataset = up_sample_controversial(train_dataset, seed)
 
+    if script_args.one_user:
+        train_dataset = train_dataset.filter(lambda example: example['data_subset'] == script_args.one_user)
+        eval_dataset = eval_dataset.filter(lambda example: example['data_subset'] == script_args.one_user)
     reward_model_type = cast(RewardModelType, script_args.reward_model_type)
 
     # Define the training args. Needs to be done before the model is loaded if you
@@ -542,9 +552,9 @@ if __name__ == "__main__":
         lr_scheduler_type = script_args.lr_scheduler_type
 
     if len(train_dataset) <= 4000:
-        eval_steps = 20
+        eval_steps = 50
     else:
-        eval_steps = 1000
+        eval_steps = 500
     training_args = TrainingArguments(
         output_dir=output_name,
         learning_rate=script_args.learning_rate,

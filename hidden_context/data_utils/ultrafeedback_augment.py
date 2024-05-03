@@ -59,8 +59,9 @@ def get_user_type(chosen_ratings, rejected_ratings, augment_type, users):
 
 def inner_join(original, binarized, augment_type, users):
     controversial_counter = 0
-    reversed_counter = 0
     keys = ['helpfulness', 'honesty', 'instruction_following', 'truthfulness']
+    reversed_counter = {key: 0 for key in users.keys()}
+    dumb_baseline = {key: 0 for key in users.keys()}
     orig_idx = 0
     out_idx = 0
     dataset_dict = {
@@ -119,9 +120,14 @@ def inner_join(original, binarized, augment_type, users):
             if True in reversed_labels:
                 controversial_counter += 1
             if reversed_labels[idx]:
-                reversed_counter += 1
+                reversed_counter[data_subset] += 1
+                dumb_baseline[data_subset] += reversed_labels.count(True)
+            else:
+                dumb_baseline[data_subset] += reversed_labels.count(False)
             out_idx += 1
-    print(out_idx, controversial_counter, reversed_counter)
+    print(out_idx, controversial_counter)
+    print(reversed_counter)
+    print(dumb_baseline)
     return Dataset.from_dict(dataset_dict)
 
 
@@ -181,3 +187,7 @@ if __name__ == '__main__':
         train_split.to_json(os.path.join(output_dir, user_type, 'train.jsonl'))
         test_split.to_json(os.path.join(output_dir, user_type, 'test.jsonl'))
 
+# 60917
+# 243332 122776
+# {'8': 9163, '4': 10459, '2': 8274, '1': 14910}
+# {'8': 192810, '4': 194090, '2': 195842, '1': 187890}

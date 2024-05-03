@@ -221,6 +221,7 @@ def generate_contexts(args, input_dataset):
     for idx in range(K):
         context_dataset = deepcopy(input_dataset)
         context_lengths = np.random.randint(1, 5, size=dataset_size).tolist()
+        # context_lengths = [6] * dataset_size
         context_dataset = context_dataset.add_column("context_length", context_lengths)
         contexts = list()
         for row_id in tqdm(range(dataset_size)):  # iterate over all samples in original dataset

@@ -16,7 +16,7 @@ class PairEncoder(nn.Module):
     Model to encode pairs of accepted and rejected responses
     """
 
-    def __init__(self, embed_dim, output_dim, hidden_dim):
+    def __init__(self, embed_dim, hidden_dim, output_dim):
         super(PairEncoder, self).__init__()
 
         self._model = nn.Sequential(
@@ -91,8 +91,8 @@ class Decoder(nn.Module):
         )
 
     def forward(self, xc, xr, z):
-        xc = torch.cat([xc, z], dim=1)
-        xr = torch.cat([xr, z], dim=1)
+        # xc = torch.cat([xc, z], dim=1)
+        # xr = torch.cat([xr, z], dim=1)
         rc = self._model(xc)
         rr = self._model(xr)
         return rc, rr
@@ -105,17 +105,18 @@ class VAEModel(nn.Module):
         self.llm_encoder = llm_encoder
         self.pair_encoder = PairEncoder(embed_dim, hidden_dim, latent_dim)
         self.sequence_encoder = SequenceEncoder(latent_dim, latent_dim)
-        self.decoder = Decoder(embed_dim + latent_dim, hidden_dim)
+        # self.decoder = Decoder(embed_dim + latent_dim, hidden_dim)
+        self.decoder = Decoder(embed_dim, hidden_dim)
 
         self.latent_dim = latent_dim
         self.fixed_contexts = fixed_contexts
         self.fixed_llm_embeddings = fixed_llm_embeddings
         self.use_causal_lm = use_causal_lm
 
-    def reparameterization(self, mean, var):
-        epsilon = torch.randn_like(var).to(mean.device)  # sampling epsilon
+    def reparameterization(self, mean, std):
+        epsilon = torch.randn_like(std).to(mean.device)  # sampling epsilon
         epsilon *= 1e-3     # TODO: set scale of variance here
-        z = mean + var * epsilon                         # reparameterization trick
+        z = mean + std * epsilon                         # reparameterization trick
         z = F.normalize(z, p=2, dim=-1) * math.sqrt(z.shape[-1])
         return z
 
@@ -138,19 +139,33 @@ class VAEModel(nn.Module):
         user_type,
         ground_truth_user_vector=False
     ):
+        # ipdb.set_trace()
         pair_embed = self.encode_pair(context_chosen, context_rejected)
 
         mean, log_var = self.encode_sequence(pair_embed, seq_start_end)
         mean = torch.clamp(mean, -1, 1)
-        log_var = torch.clamp(log_var, -1, 1)
+
+        # Version 1
+        _log_var = torch.clamp(log_var, -1, 1)
         if ground_truth_user_vector:
-            z = (user_type * 2 - 1).unsqueeze(1).repeat(1, mean.shape[1])
+            z = (user_type * 2 - 1).unsqueeze(1).repeat(1, mean.shape[1])       # todo: change ground-truth implementation
+            # z = torch.zeros_like(mean).reshape(mean.shape[0], 4, -1)
+            # for idx in range(user_type.shape[0]):
+            #     z[idx][int(user_type[idx])] += 1
+            # z = z.reshape(mean.shape[0], -1)
         else:
-            z = self.reparameterization(mean, torch.exp(0.5 * log_var))
+            z = self.reparameterization(mean, torch.exp(0.5 * _log_var))
+
+        # Version 2
+        # act = torch.nn.Softplus()
+        # std = act(log_var) * 1e-3
+        # # std = torch.sigmoid(log_var) * 1e-3    # use log_var as std prediction
+        # _log_var = torch.log(std ** 2)
+        # z = self.reparameterization(mean, std)
 
         rc, rr = self.decode(target_chosen, target_rejected, z)
 
-        return rc, rr, mean, log_var, z
+        return rc, rr, mean, _log_var, z
 
     def save_model(self, path):
         # state_dict = {
