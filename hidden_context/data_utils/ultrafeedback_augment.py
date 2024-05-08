@@ -32,33 +32,38 @@ def array_to_type(arr):
 def get_user_type(chosen_ratings, rejected_ratings, augment_type, users):
     keys = ['helpfulness', 'honesty', 'instruction_following', 'truthfulness']
     chosen_rating_values = list()
-    rejected_chosen_values = list()
+    rejected_rating_values = list()
     for key in keys:
         chosen_rating_values.append(chosen_ratings[key])
-        rejected_chosen_values.append(rejected_ratings[key])
+        rejected_rating_values.append(rejected_ratings[key])
     chosen_values = np.asarray(chosen_rating_values)
-    rejected_values = np.asarray(rejected_chosen_values)
+    rejected_values = np.asarray(rejected_rating_values)
+    has_equal =  True in list(chosen_values == rejected_values)
     if augment_type == 'single':
         data_subsets = ['8', '4', '2', '1']
         reversed_labels = list(random_greater_than_zero(rejected_values - chosen_values))
-        return data_subsets, reversed_labels
+        return data_subsets, reversed_labels, has_equal
     elif augment_type == 'set':
         data_subsets = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15']
         preferences = np.array([users[user] for user in data_subsets])
         reversed_labels = list(random_greater_than_zero(np.dot(preferences, rejected_values - chosen_values)))
-        return data_subsets, reversed_labels
+        return data_subsets, reversed_labels, has_equal
     elif augment_type == 'pos_neg':
         user_orig = np.ones(4, dtype=int) * (random_greater_than_zero(chosen_values - rejected_values))
         user_rev = 1 - user_orig
         data_subsets = [array_to_type(user_orig), array_to_type(user_rev)]
         reversed_labels = [False, True]
-        return data_subsets, reversed_labels
+        return data_subsets, reversed_labels, has_equal
     else:
         raise ValueError('Invalid augment_type')
 
 
-def inner_join(original, binarized, augment_type, users):
+def inner_join(original, binarized, augment_type, users, two_two_only=False, filter_equal=False):
+    agreed_counter = 0
     controversial_counter = 0
+    three_one_counter = 0
+    two_two_counter = 0
+    one_three_counter = 0
     keys = ['helpfulness', 'honesty', 'instruction_following', 'truthfulness']
     reversed_counter = {key: 0 for key in users.keys()}
     dumb_baseline = {key: 0 for key in users.keys()}
@@ -104,8 +109,29 @@ def inner_join(original, binarized, augment_type, users):
         if not flag or len(chosen_ratings) != 4 or len(rejected_ratings) != 4:
             continue
 
-        data_subsets, reversed_labels = get_user_type(chosen_ratings, rejected_ratings, augment_type, users)
+        data_subsets, reversed_labels, has_equal = get_user_type(chosen_ratings, rejected_ratings, augment_type, users)
+        if has_equal and filter_equal:
+            continue
+        if two_two_only:
+            if reversed_labels.count(True) == 2:
+                two_two_counter += 1
+            elif reversed_labels.count(True) == 3:
+                one_three_counter += 1
+                continue
+            elif reversed_labels.count(True) == 1:
+                three_one_counter += 1
+                continue
+            else:
+                agreed_counter += 1
+                continue
         for idx, data_subset in enumerate(data_subsets):
+            if True in reversed_labels:
+                controversial_counter += 1
+            if reversed_labels[idx]:
+                reversed_counter[data_subset] += 1
+                dumb_baseline[data_subset] += reversed_labels.count(True)
+            else:
+                dumb_baseline[data_subset] += reversed_labels.count(False)
             dataset_dict['Index'].append(out_idx)
             dataset_dict['prompt'].append(prompt)
             if not reversed_labels[idx]:
@@ -117,17 +143,11 @@ def inner_join(original, binarized, augment_type, users):
             dataset_dict['data_subset'].append(data_subset)
             dataset_dict['controversial'].append(True in reversed_labels)
             dataset_dict['reversed'].append(reversed_labels[idx])
-            if True in reversed_labels:
-                controversial_counter += 1
-            if reversed_labels[idx]:
-                reversed_counter[data_subset] += 1
-                dumb_baseline[data_subset] += reversed_labels.count(True)
-            else:
-                dumb_baseline[data_subset] += reversed_labels.count(False)
             out_idx += 1
+    print(agreed_counter, three_one_counter, two_two_counter, one_three_counter)
     print(out_idx, controversial_counter)
-    print(reversed_counter)
-    print(dumb_baseline)
+    print("Reversed counter:", reversed_counter)
+    print("Dumb baseline:", dumb_baseline)
     return Dataset.from_dict(dataset_dict)
 
 
@@ -175,9 +195,10 @@ if __name__ == '__main__':
     ultra_feedback = load_dataset('openbmb/UltraFeedback')
     binarized_cleaned = load_dataset('argilla/ultrafeedback-binarized-preferences-cleaned')
     print(len(binarized_cleaned['train']))
-    joined_dataset = inner_join(ultra_feedback['train'], binarized_cleaned['train'], args.augment_type, user_types)
+    joined_dataset = inner_join(ultra_feedback['train'], binarized_cleaned['train'], args.augment_type, user_types,
+                                two_two_only=True, filter_equal=True)
 
-    output_dir = os.path.join('data', 'UltraFeedback_{}'.format(args.augment_type))
+    output_dir = os.path.join('data', 'UltraFeedback_{}_finegrained_filtered'.format(args.augment_type))
     for user_type in user_types.keys():
         subset = joined_dataset.filter(lambda x: x['data_subset'] == user_type)
         print(user_types[user_type], len(subset))
