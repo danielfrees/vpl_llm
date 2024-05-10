@@ -3,6 +3,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional, cast
 from tqdm import tqdm
+import random
 
 from transformers import (
     HfArgumentParser,
@@ -265,7 +266,11 @@ def generate_contexts(args, input_dataset):
 
 if __name__ == "__main__":
     # default setting on HH-RLHF dataset, please iterate over data subsets and data splits
-    np.random.seed(0)
+    seed = 0
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
     parser = HfArgumentParser(ScriptArguments)
     script_args: ScriptArguments = parser.parse_args_into_dataclasses()[0]
     print(script_args)

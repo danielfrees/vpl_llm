@@ -1,6 +1,7 @@
 import argparse
 import random
 
+import torch
 from datasets import load_dataset, Dataset
 import numpy as np
 import os
@@ -38,7 +39,7 @@ def get_user_type(chosen_ratings, rejected_ratings, augment_type, users):
         rejected_rating_values.append(rejected_ratings[key])
     chosen_values = np.asarray(chosen_rating_values)
     rejected_values = np.asarray(rejected_rating_values)
-    has_equal =  True in list(chosen_values == rejected_values)
+    has_equal = True in list(chosen_values == rejected_values)
     if augment_type == 'single':
         data_subsets = ['8', '4', '2', '1']
         reversed_labels = list(random_greater_than_zero(rejected_values - chosen_values))
@@ -159,6 +160,8 @@ if __name__ == '__main__':
     seed = args.seed
     random.seed(seed)
     np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
     sixteen = {
         '0': (0, 0, 0, 0),
         '1': (0, 0, 0, 1),
@@ -194,19 +197,28 @@ if __name__ == '__main__':
 
     ultra_feedback = load_dataset('openbmb/UltraFeedback')
     binarized_cleaned = load_dataset('argilla/ultrafeedback-binarized-preferences-cleaned')
-    print(len(binarized_cleaned['train']))
-    joined_dataset = inner_join(ultra_feedback['train'], binarized_cleaned['train'], args.augment_type, user_types,
-                                two_two_only=True, filter_equal=True)
+    length = len(binarized_cleaned['train'])
+    print(length)
+    test_ids = list(np.random.choice(length, int(length * 0.1), replace=False))
+    train_split = binarized_cleaned['train'].filter(lambda example, idx: idx not in test_ids, with_indices=True)
+    test_split = binarized_cleaned['train'].filter(lambda example, idx: idx in test_ids, with_indices=True)
+    print(len(train_split), len(test_split))
+    print("start processing train split")
+    joined_dataset_train = inner_join(ultra_feedback['train'], train_split, args.augment_type, user_types,
+                                      two_two_only=True, filter_equal=True)
+    print("start processing test split")
+    joined_dataset_test = inner_join(ultra_feedback['train'], test_split, args.augment_type, user_types,
+                                     two_two_only=True, filter_equal=True)
 
     output_dir = os.path.join('data', 'UltraFeedback_{}_finegrained_filtered'.format(args.augment_type))
     for user_type in user_types.keys():
-        subset = joined_dataset.filter(lambda x: x['data_subset'] == user_type)
-        print(user_types[user_type], len(subset))
-        split = subset.train_test_split(test_size=0.1)
-        train_split = split['train']
-        test_split = split['test']
-        train_split.to_json(os.path.join(output_dir, user_type, 'train.jsonl'))
-        test_split.to_json(os.path.join(output_dir, user_type, 'test.jsonl'))
+        train_subset = joined_dataset_train.filter(lambda x: x['data_subset'] == user_type)
+        test_subset = joined_dataset_test.filter(lambda x: x['data_subset'] == user_type)
+        print(user_types[user_type], len(train_subset), len(test_subset))
+        train_subset.to_json(os.path.join(output_dir, user_type, 'train.jsonl'))
+        test_subset.to_json(os.path.join(output_dir, user_type, 'test.jsonl'))
+
+# python -m hidden_context.data_utils.ultrafeedback_augment -a single
 
 # 60917
 # 243332 122776

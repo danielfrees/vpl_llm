@@ -10,6 +10,7 @@ from transformers import (
 )
 
 import torch
+import random
 
 from hidden_context.data_utils.data_processing import (
     ScriptArguments,
@@ -119,7 +120,11 @@ def generate_synthetic_dataset(args):
 
 if __name__ == "__main__":
     # default setting on synthetic language dataset, please iterate over data subsets and data splits
-    np.random.seed(0)
+    seed = 0
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
     parser = HfArgumentParser(ScriptArguments)
     script_args: ScriptArguments = parser.parse_args_into_dataclasses()[0]
     print(script_args)
