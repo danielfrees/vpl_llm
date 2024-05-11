@@ -9,6 +9,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 from transformers import Trainer, EvalPrediction
 import wandb
+from hidden_context.transformer_utils import *
 
 
 class PairEncoder(nn.Module):
@@ -122,14 +123,50 @@ class Attention(nn.Module):
         return weighted_values
 
 
+def make_transformer_encoder(d_model, N=2, h=8, d_ff=1024, dropout=0.1):
+    c = copy.deepcopy
+    attn = MultiHeadedAttention(h, d_model)
+    ff = PositionwiseFeedForward(d_model, d_ff, dropout)
+    return clones(TransformerLayer(d_model, c(attn), c(ff), dropout), N)
+
+
+class TransformerSequenceEncoder(nn.Module):
+    def __init__(self, input_dim, latent_dim):
+        super(TransformerSequenceEncoder, self).__init__()
+        self.transformer_encoder = make_transformer_encoder(2 * input_dim)
+        self.mean_layer = nn.Linear(2 * input_dim, latent_dim)
+        self.log_var_layer = nn.Linear(2 * input_dim, latent_dim)
+        self.layer_norm = nn.LayerNorm(latent_dim)
+
+    def forward(self, context_chosen, context_rejected, seq_start_end):
+        outputs = []
+        for _, (start, end) in enumerate(seq_start_end):
+            chosen = context_chosen[start:end]      # C_i x D
+            rejected = context_rejected[start:end]  # C_i x D
+            context = torch.cat([chosen, rejected], dim=1).unsqueeze(0)      # 1 x C_i x 2D
+            for layer in self.transformer_encoder:
+                context = layer(context)
+            context_embedding = torch.mean(context[0], dim=0)     # 2D
+            outputs.append(context_embedding)
+        outputs = torch.stack(outputs, dim=0)  # n x 2D
+
+        mean = self.layer_norm(self.mean_layer(outputs))
+        log_var = self.layer_norm(self.log_var_layer(outputs))
+        return mean, log_var
+
+
 class VAEModel(nn.Module):
     def __init__(self, embed_dim, hidden_dim, latent_dim, llm_encoder, llm_contexts_encoder,
-                 fixed_contexts=False, fixed_llm_embeddings=False, use_causal_lm=False, use_attention_layer=False):
+                 fixed_contexts=False, fixed_llm_embeddings=False, use_causal_lm=False, use_attention_layer=False,
+                 use_transformer=False):
         super(VAEModel, self).__init__()
         self.llm_encoder = llm_encoder
         self.llm_contexts_encoder = llm_contexts_encoder
-        self.pair_encoder = PairEncoder(embed_dim, hidden_dim, latent_dim)
-        self.sequence_encoder = SequenceEncoder(latent_dim, latent_dim)
+        if not use_transformer:
+            self.pair_encoder = PairEncoder(embed_dim, hidden_dim, latent_dim)
+            self.sequence_encoder = SequenceEncoder(latent_dim, latent_dim)
+        else:
+            self.sequence_encoder = TransformerSequenceEncoder(embed_dim, latent_dim)
         self.decoder = Decoder(embed_dim + latent_dim, hidden_dim)
         # self.decoder = Decoder(embed_dim, hidden_dim)
 
@@ -138,6 +175,7 @@ class VAEModel(nn.Module):
         self.fixed_llm_embeddings = fixed_llm_embeddings
         self.use_causal_lm = use_causal_lm
         self.use_attention_layer = use_attention_layer
+        self.use_transformer = use_transformer
         if self.use_attention_layer:
             self.attention_layer = Attention(embed_dim, latent_dim, embed_dim)
 
@@ -169,9 +207,13 @@ class VAEModel(nn.Module):
         mask_chosen=None,
         mask_rejected=None,
     ):
-        pair_embed = self.encode_pair(context_chosen, context_rejected)
+        if not self.use_transformer:
+            pair_embed = self.encode_pair(context_chosen, context_rejected)
 
-        mean, log_var = self.encode_sequence(pair_embed, seq_start_end)
+            mean, log_var = self.encode_sequence(pair_embed, seq_start_end)
+        else:
+            mean, log_var = self.sequence_encoder(context_chosen, context_rejected, seq_start_end)
+
         mean = torch.clamp(mean, -1, 1)
 
         # Version 1
