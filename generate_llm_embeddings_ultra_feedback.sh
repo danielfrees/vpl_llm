@@ -23,13 +23,25 @@ fi
 
 echo "${subsets}"
 #
+#for subset in ${subsets}
+#do
+#    python -m hidden_context.data_utils.data_processing --output_dir "data/UltraFeedback${postfix}_in_context_fixed_finegrained_filtered_last_token/" \
+#    --data_path "data/UltraFeedback${postfix}_finegrained_filtered" --data_subset ${subset} --data_split test --model_type ${model_type} \
+#    --other_subsets ${other_subsets} --add_controversial True
+#
+#    python -m hidden_context.data_utils.data_processing --output_dir "data/UltraFeedback${postfix}_in_context_fixed_finegrained_filtered_last_token/" \
+#    --data_path "data/UltraFeedback${postfix}_finegrained_filtered" --data_subset ${subset} --data_split train --model_type ${model_type} \
+#    --other_subsets ${other_subsets} --add_controversial True
+#done
+
+
 for subset in ${subsets}
 do
-    python -m hidden_context.data_utils.data_processing --output_dir "data/UltraFeedback${postfix}_in_context_fixed_finegrained_filtered_last_token/" \
+    python -m hidden_context.data_utils.data_processing --output_dir "data/UltraFeedback${postfix}_in_context_finegrained_filtered_last_token/" \
     --data_path "data/UltraFeedback${postfix}_finegrained_filtered" --data_subset ${subset} --data_split test --model_type ${model_type} \
-    --other_subsets ${other_subsets} --add_controversial True
+    --other_subsets ${other_subsets} --add_controversial True --with_embeddings False
 
-    python -m hidden_context.data_utils.data_processing --output_dir "data/UltraFeedback${postfix}_in_context_fixed_finegrained_filtered_last_token/" \
+    python -m hidden_context.data_utils.data_processing --output_dir "data/UltraFeedback${postfix}_in_context_finegrained_filtered_last_token/" \
     --data_path "data/UltraFeedback${postfix}_finegrained_filtered" --data_subset ${subset} --data_split train --model_type ${model_type} \
-    --other_subsets ${other_subsets} --add_controversial True
+    --other_subsets ${other_subsets} --add_controversial True --with_embeddings False
 done

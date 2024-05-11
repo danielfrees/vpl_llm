@@ -208,10 +208,7 @@ def generate_embeddings_with_llm(args, input_dataset=None):
 
 
 def generate_contexts(args, input_dataset):
-    if args.with_embeddings:
-        output_dir = os.path.join(args.output_dir, f"{args.model_type}", f"{args.data_subset}")
-    else:
-        output_dir = os.path.join(args.output_dir, f"{args.data_subset}")
+    output_dir = os.path.join(args.output_dir, f"{args.model_type}", f"{args.data_subset}")
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
