@@ -162,6 +162,8 @@ class ScriptArguments:
     use_last_token_embedding: bool = field(default=False)
     use_attention_layer: bool = field(default=False)
     one_user: str = field(default=None)
+    concat_contexts: bool = field(default=False)
+    use_transformer: bool = field(default=False)
 
 
 class HHRLHFPreprocessor(object):
@@ -200,6 +202,8 @@ class HHRLHFPreprocessor(object):
         }
         if self.args.fixed_contexts:
             new_examples["contexts_embeddings"] = []
+        elif self.args.concat_contexts:
+            new_examples["contexts"] = []
         else:
             new_examples["contexts_tokens"] = []
         for chosen, rejected, contexts, user_type in zip(
@@ -230,6 +234,18 @@ class HHRLHFPreprocessor(object):
                                         "embedding_rejected": context["embedding_rejected"]}
                                        for context in contexts]
                 new_examples["contexts_embeddings"].append(contexts_embeddings)
+            elif self.args.concat_contexts:
+                # Tokenize the contexts.
+                full_contexts = "The following chosen / rejected pairs are collected from a same user. Please use these contexts to estimate the user's preference. "
+                for idx, context in enumerate(contexts):
+                    chosen, rejected = context["chosen"], context["rejected"]
+                    full_contexts += "\n[Pair {}]\nChosen: ".format(idx) + chosen + "\nRejected: " + rejected
+                tokenized_full_contexts = self.tokenizer(full_contexts, **self.tokenizer_kwargs)
+                new_examples["contexts"].append({
+                    "contexts_input_ids": tokenized_full_contexts["input_ids"],
+                    "contexts_attention_mask": tokenized_full_contexts["attention_mask"],
+                })
+                max_length = max(max_length, len(tokenized_full_contexts["input_ids"]))
             else:
                 tokenized_context = []
                 # Tokenize the contexts.
@@ -668,7 +684,8 @@ if __name__ == "__main__":
                          fixed_contexts=script_args.fixed_contexts,
                          fixed_llm_embeddings=script_args.fixed_llm_embeddings,
                          use_causal_lm=script_args.use_causal_lm,
-                         use_attention_layer=script_args.use_attention_layer,)
+                         use_attention_layer=script_args.use_attention_layer,
+                         use_transformer=script_args.use_transformer)
 
     trainer = trainer_class(
         model=vae_model,
