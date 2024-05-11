@@ -359,9 +359,9 @@ class VAETrainer(Trainer):
                 # sum_embeddings = torch.sum(last_hidden_state_chosen * weights_for_non_padding_chosen.unsqueeze(-1), dim=1)
                 # num_of_none_padding_tokens_chosen = torch.sum(weights_for_non_padding_chosen, dim=-1).unsqueeze(-1)
                 # contexts_embeddings_chosen = sum_embeddings / num_of_none_padding_tokens_chosen
-
+                token_length_chosen = torch.where(token_length_chosen >= 0, token_length_chosen,
+                                                  last_hidden_state_chosen.shape[1] - 1)
                 contexts_embeddings_chosen = torch.diagonal(torch.index_select(last_hidden_state_chosen, 1, token_length_chosen - 1)).T
-
                 last_hidden_state_rejected = model.llm_contexts_encoder(
                     input_ids=input_ids_rejected,
                     attention_mask=attention_mask_rejected,
@@ -375,7 +375,8 @@ class VAETrainer(Trainer):
                 #                            dim=1)
                 # num_of_none_padding_tokens_rejected = torch.sum(weights_for_non_padding_rejected, dim=-1).unsqueeze(-1)
                 # contexts_embeddings_rejected = sum_embeddings / num_of_none_padding_tokens_rejected
-
+                token_length_rejected = torch.where(token_length_rejected >= 0, token_length_rejected,
+                                                    last_hidden_state_rejected.shape[1] - 1)
                 contexts_embeddings_rejected = torch.diagonal(torch.index_select(last_hidden_state_rejected, 1, token_length_rejected - 1)).T
 
                 # contexts_embeddings_chosen = model.llm_contexts_encoder(
