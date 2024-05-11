@@ -91,31 +91,59 @@ class Decoder(nn.Module):
         )
 
     def forward(self, xc, xr, z):
-        # xc = torch.cat([xc, z], dim=1)
-        # xr = torch.cat([xr, z], dim=1)
+        xc = torch.cat([xc, z], dim=1)
+        xr = torch.cat([xr, z], dim=1)
         rc = self._model(xc)
         rr = self._model(xr)
         return rc, rr
 
 
+class Attention(nn.Module):
+    def __init__(self, input_dim, latent_dim, output_dim):
+        super(Attention, self).__init__()
+        self.w_q = nn.Linear(latent_dim, output_dim)     # mapping z to q
+        # self.w_k = nn.Linear(input_dim, output_dim)     # mapping tokens to k
+        # self.w_v = nn.Linear(input_dim, output_dim)     # mapping tokens to v
+        self.w_k = nn.Identity()
+        self.w_v = nn.Identity()
+
+
+    def forward(self, x, z, mask=None):
+        q = self.w_q(z.unsqueeze(-2))     # 1 x d
+        k = self.w_k(x)     # l x d
+        v = self.w_v(x)     # l x d'
+        attention_scores = torch.matmul(q, k.transpose(-2, -1))     # 1 x l
+        attention_scores = attention_scores / (x.shape[-1] ** 0.5)  # 1 x l
+        if mask is not None:
+            attention_scores = attention_scores * mask
+        attention_weights = F.softmax(attention_scores, dim=-1)     # 1 x l
+        weighted_values = torch.matmul(attention_weights, v)        # 1 x d'
+
+        return weighted_values
+
+
 class VAEModel(nn.Module):
-    def __init__(self, embed_dim, hidden_dim, latent_dim, llm_encoder,
-                 fixed_contexts=False, fixed_llm_embeddings=False, use_causal_lm=False):
+    def __init__(self, embed_dim, hidden_dim, latent_dim, llm_encoder, llm_contexts_encoder,
+                 fixed_contexts=False, fixed_llm_embeddings=False, use_causal_lm=False, use_attention_layer=False):
         super(VAEModel, self).__init__()
         self.llm_encoder = llm_encoder
+        self.llm_contexts_encoder = llm_contexts_encoder
         self.pair_encoder = PairEncoder(embed_dim, hidden_dim, latent_dim)
         self.sequence_encoder = SequenceEncoder(latent_dim, latent_dim)
-        # self.decoder = Decoder(embed_dim + latent_dim, hidden_dim)
-        self.decoder = Decoder(embed_dim, hidden_dim)
+        self.decoder = Decoder(embed_dim + latent_dim, hidden_dim)
+        # self.decoder = Decoder(embed_dim, hidden_dim)
 
         self.latent_dim = latent_dim
         self.fixed_contexts = fixed_contexts
         self.fixed_llm_embeddings = fixed_llm_embeddings
         self.use_causal_lm = use_causal_lm
+        self.use_attention_layer = use_attention_layer
+        if self.use_attention_layer:
+            self.attention_layer = Attention(embed_dim, latent_dim, embed_dim)
 
     def reparameterization(self, mean, std):
         epsilon = torch.randn_like(std).to(mean.device)  # sampling epsilon
-        epsilon *= 1e-3     # TODO: set scale of variance here
+        # epsilon *= 0     # TODO: set scale of variance here
         z = mean + std * epsilon                         # reparameterization trick
         z = F.normalize(z, p=2, dim=-1) * math.sqrt(z.shape[-1])
         return z
@@ -137,9 +165,10 @@ class VAEModel(nn.Module):
         context_rejected,
         seq_start_end,
         user_type,
-        ground_truth_user_vector=False
+        ground_truth_user_vector=False,
+        mask_chosen=None,
+        mask_rejected=None,
     ):
-        # ipdb.set_trace()
         pair_embed = self.encode_pair(context_chosen, context_rejected)
 
         mean, log_var = self.encode_sequence(pair_embed, seq_start_end)
@@ -148,13 +177,22 @@ class VAEModel(nn.Module):
         # Version 1
         _log_var = torch.clamp(log_var, -1, 1)
         if ground_truth_user_vector:
-            z = (user_type * 2 - 1).unsqueeze(1).repeat(1, mean.shape[1])       # todo: change ground-truth implementation
-            # z = torch.zeros_like(mean).reshape(mean.shape[0], 4, -1)
-            # for idx in range(user_type.shape[0]):
-            #     z[idx][int(user_type[idx])] += 1
-            # z = z.reshape(mean.shape[0], -1)
+            # z = (user_type * 2 - 1).unsqueeze(1).repeat(1, mean.shape[1])       # todo: change ground-truth implementation
+            z = torch.zeros_like(mean).reshape(mean.shape[0], 4, -1)
+            for idx in range(user_type.shape[0]):
+                z[idx][int(user_type[idx])] += 1
+            z = z.reshape(mean.shape[0], -1)
         else:
             z = self.reparameterization(mean, torch.exp(0.5 * _log_var))
+            # target_z = torch.zeros([4, 4, mean.shape[-1] // 4], dtype=z.dtype).to(z.device)
+            # target_z[0, 0] = 1
+            # target_z[1, 1] = 1
+            # target_z[2, 2] = 1
+            # target_z[3, 3] = 1
+            # target_z = target_z.reshape(4, -1)
+            #
+            # weights = F.softmax(torch.tensordot(z, target_z, dims=([1], [1])), dim=-1)
+            # z = weights @ target_z
 
         # Version 2
         # act = torch.nn.Softplus()
@@ -163,6 +201,11 @@ class VAEModel(nn.Module):
         # _log_var = torch.log(std ** 2)
         # z = self.reparameterization(mean, std)
 
+        if not self.training and not ground_truth_user_vector:
+            z = mean
+        if self.use_attention_layer:
+            target_chosen = self.attention_layer(target_chosen, z, mask_chosen)
+            target_rejected = self.attention_layer(target_rejected, z, mask_rejected)
         rc, rr = self.decode(target_chosen, target_rejected, z)
 
         return rc, rr, mean, _log_var, z
@@ -235,16 +278,29 @@ class VAETrainer(Trainer):
                 masked_last_hidden_state = last_hidden_state * attention_mask.unsqueeze(-1)
                 token_length = torch.sum(attention_mask, dim=1)
                 embeddings = torch.sum(masked_last_hidden_state, dim=1) / token_length.unsqueeze(-1)
+                embeddings_chosen = embeddings[:batch_size]
+                embeddings_rejected = embeddings[batch_size:]
+            elif model.use_attention_layer:
+                embeddings_chosen = model.llm_encoder(
+                    input_ids=inputs["input_ids_chosen"],
+                    attention_mask=inputs["attention_mask_chosen"],
+                    output_hidden_states=True
+                ).hidden_states[-1]
+                embeddings_rejected = model.llm_encoder(
+                    input_ids=inputs["input_ids_rejected"],
+                    attention_mask=inputs["attention_mask_rejected"],
+                    output_hidden_states=True
+                ).hidden_states[-1]
             else:
                 embeddings = model.llm_encoder(
-                    torch.concatenate(
+                    input_ids=torch.concatenate(
                         [
                             inputs["input_ids_chosen"],
                             inputs["input_ids_rejected"],
                         ],
                         dim=0,
                     ),
-                    torch.concatenate(
+                    attention_mask=torch.concatenate(
                         [
                             inputs["attention_mask_chosen"],
                             inputs["attention_mask_rejected"],
@@ -252,15 +308,15 @@ class VAETrainer(Trainer):
                         dim=0,
                     ),
                 )[0]
-            embeddings_chosen = embeddings[:batch_size]
-            embeddings_rejected = embeddings[batch_size:]
+                embeddings_chosen = embeddings[:batch_size]
+                embeddings_rejected = embeddings[batch_size:]
 
         if model.fixed_contexts:
             contexts_embeddings_chosen = torch.tensor(inputs["contexts_embeddings_chosen"]).to(device).bfloat16()
             contexts_embeddings_rejected = torch.tensor(inputs["contexts_embeddings_rejected"]).to(device).bfloat16()
         else:
             if model.use_causal_lm:
-                last_hidden_state_chosen = model.llm_encoder(
+                last_hidden_state_chosen = model.llm_contexts_encoder(
                     input_ids=inputs["contexts_input_ids_chosen"],
                     attention_mask=inputs["contexts_attention_mask_chosen"],
                     output_hidden_states=True
@@ -271,7 +327,7 @@ class VAETrainer(Trainer):
                 contexts_embeddings_chosen = torch.sum(masked_last_hidden_state_chosen,
                                                        dim=1) / token_length_chosen.unsqueeze(-1)
 
-                last_hidden_state_rejected = model.llm_encoder(
+                last_hidden_state_rejected = model.llm_contexts_encoder(
                     input_ids=inputs["contexts_input_ids_rejected"],
                     attention_mask=inputs["contexts_attention_mask_rejected"],
                     output_hidden_states=True
@@ -282,14 +338,54 @@ class VAETrainer(Trainer):
                 contexts_embeddings_rejected = torch.sum(masked_last_hidden_state_rejected,
                                                          dim=1) / token_length_rejected.unsqueeze(-1)
             else:
-                contexts_embeddings_chosen = model.llm_encoder(
-                    inputs["contexts_input_ids_chosen"],
-                    inputs["contexts_attention_mask_chosen"]
-                )[0]
-                contexts_embeddings_rejected = model.llm_encoder(
-                    inputs["contexts_input_ids_rejected"],
-                    inputs["contexts_attention_mask_rejected"]
-                )[0]
+                input_ids_chosen = inputs["contexts_input_ids_chosen"]
+                attention_mask_chosen = inputs["contexts_attention_mask_chosen"]
+                token_length_chosen = torch.eq(input_ids_chosen,
+                                               model.llm_contexts_encoder.config.pad_token_id).int().argmax(-1) - 1
+                input_ids_rejected = inputs["contexts_input_ids_rejected"]
+                attention_mask_rejected = inputs["contexts_attention_mask_rejected"]
+                token_length_rejected = torch.eq(input_ids_rejected,
+                                                 model.llm_contexts_encoder.config.pad_token_id).int().argmax(-1) - 1
+
+                last_hidden_state_chosen = model.llm_contexts_encoder(
+                    input_ids=input_ids_chosen,
+                    attention_mask=attention_mask_chosen,
+                    output_hidden_states=True
+                ).hidden_states[-1]
+
+                # weights_for_non_padding_chosen = attention_mask_chosen * torch.arange(
+                #     start=1, end=last_hidden_state_chosen.shape[1] + 1
+                # ).unsqueeze(0).to(attention_mask_chosen.device).float()
+                # sum_embeddings = torch.sum(last_hidden_state_chosen * weights_for_non_padding_chosen.unsqueeze(-1), dim=1)
+                # num_of_none_padding_tokens_chosen = torch.sum(weights_for_non_padding_chosen, dim=-1).unsqueeze(-1)
+                # contexts_embeddings_chosen = sum_embeddings / num_of_none_padding_tokens_chosen
+
+                contexts_embeddings_chosen = torch.diagonal(torch.index_select(last_hidden_state_chosen, 1, token_length_chosen - 1)).T
+
+                last_hidden_state_rejected = model.llm_contexts_encoder(
+                    input_ids=input_ids_rejected,
+                    attention_mask=attention_mask_rejected,
+                    output_hidden_states=True
+                ).hidden_states[-1]
+
+                # weights_for_non_padding_rejected = attention_mask_rejected * torch.arange(
+                #     start=1, end=last_hidden_state_rejected.shape[1] + 1
+                # ).unsqueeze(0).to(attention_mask_rejected.device).float()
+                # sum_embeddings = torch.sum(last_hidden_state_rejected * weights_for_non_padding_rejected.unsqueeze(-1),
+                #                            dim=1)
+                # num_of_none_padding_tokens_rejected = torch.sum(weights_for_non_padding_rejected, dim=-1).unsqueeze(-1)
+                # contexts_embeddings_rejected = sum_embeddings / num_of_none_padding_tokens_rejected
+
+                contexts_embeddings_rejected = torch.diagonal(torch.index_select(last_hidden_state_rejected, 1, token_length_rejected - 1)).T
+
+                # contexts_embeddings_chosen = model.llm_contexts_encoder(
+                #     input_ids=inputs["contexts_input_ids_chosen"],
+                #     attention_mask=inputs["contexts_attention_mask_chosen"],
+                # )[0]
+                # contexts_embeddings_rejected = model.llm_contexts_encoder(
+                #     input_ids=inputs["contexts_input_ids_rejected"],
+                #     attention_mask=inputs["contexts_attention_mask_rejected"]
+                # )[0]
         seq_start_end = inputs["seq_start_end"]
         user_type = torch.tensor(inputs["user_type"]).to(device).bfloat16()
 
@@ -300,7 +396,9 @@ class VAETrainer(Trainer):
             contexts_embeddings_rejected,
             seq_start_end,
             user_type,
-            ground_truth_user_vector=False       # todo: set to True for debug usage
+            ground_truth_user_vector=False,       # todo: set to True for debug usage
+            mask_chosen=inputs["attention_mask_chosen"],
+            mask_rejected=inputs["attention_mask_rejected"],
         )
 
         reproduction_loss = self.loss(rewards_chosen, rewards_rejected)
@@ -310,7 +408,7 @@ class VAETrainer(Trainer):
             if not return_outputs:
                 self.log(
                     {
-                        "train_loss": reproduction_loss.mean().item(),
+                        "train_recon_loss": reproduction_loss.mean().item(),
                         "train_accuracy": accuracy.mean().item(),
                         "rewards_chosen": rewards_chosen.mean().item(),
                         "rewards_rejected": rewards_rejected.mean().item(),
@@ -321,7 +419,7 @@ class VAETrainer(Trainer):
                     }
                 )
         else:
-            kld = -torch.sum(1 + log_var - mean.pow(2) - log_var.exp())
+            kld = -0.5 * torch.sum(1 + log_var - mean.pow(2) - log_var.exp(), dim=1).mean()
             if self.use_annealing:
                 kld = self.annealer(kld)
                 self.annealer.step()
@@ -331,7 +429,7 @@ class VAETrainer(Trainer):
             if not return_outputs:
                 self.log(
                     {
-                        "train_loss": reproduction_loss.mean().item(),
+                        "train_recon_loss": reproduction_loss.mean().item(),
                         "train_kld": kld.mean().item(),
                         "train_accuracy": accuracy.mean().item(),
                         "rewards_chosen": rewards_chosen.mean().item(),
@@ -375,16 +473,21 @@ class VAETrainer(Trainer):
         log_var = torch.from_numpy(log_var)
 
         loss = cls.per_sample_loss(rewards_chosen, rewards_rejected)
-        kld = -torch.sum(1 + log_var - mean.pow(2) - log_var.exp())
+        kld = -torch.sum(1 + log_var - mean.pow(2) - log_var.exp(), dim=-1)
         accuracy = torch.mean((loss < np.log(2)).float())
-
+        from sklearn.manifold import TSNE
+        z_embedding = TSNE(n_components=2, init='random', perplexity=20, learning_rate="auto").fit_transform(mean.numpy())
+        import matplotlib.pyplot as plt
+        colors = [f"C{int(i)}" for i in user_type]
+        plt.scatter(z_embedding[:, 0], z_embedding[:, 1], c=colors)
+        im = wandb.Image(plt)
+        plt.close()
         return {
             "loss": loss.mean().item(),
             "accuracy": accuracy.item(),
-            "kld": kld.item(),
+            "kld": kld.mean().item(),
             # # "total_loss": loss.mean().item() + kld.item(),
-            # "user_embeddings": wandb.Table(columns=list(range(-1, z.shape[1])),
-            #                                data=[[int(user_type[i])] + z[i].tolist() for i in range(z.shape[0])]),
+            "user_embeddings": im,
         }
 
 

@@ -160,6 +160,7 @@ class ScriptArguments:
     up_sampling: bool = field(default=False)
     other_subsets: str = field(default=None)
     use_last_token_embedding: bool = field(default=False)
+    use_attention_layer: bool = field(default=False)
     one_user: str = field(default=None)
 
 
@@ -497,7 +498,7 @@ if __name__ == "__main__":
 
     torch.set_default_dtype(torch.bfloat16 if script_args.bf16 else torch.float32)
 
-    if script_args.use_causal_lm or script_args.use_last_token_embedding:
+    if script_args.use_causal_lm or script_args.use_last_token_embedding or script_args.use_attention_layer:
         if script_args.model_name == 'gpt2':
             script_args.embed_dim = 768
         if script_args.model_name == 'meta-llama/Llama-2-7b-hf':
@@ -551,10 +552,6 @@ if __name__ == "__main__":
     else:
         lr_scheduler_type = script_args.lr_scheduler_type
 
-    if len(train_dataset) <= 4000:
-        eval_steps = 50
-    else:
-        eval_steps = 500
     training_args = TrainingArguments(
         output_dir=output_name,
         learning_rate=script_args.learning_rate,
@@ -563,7 +560,7 @@ if __name__ == "__main__":
         num_train_epochs=script_args.num_train_epochs,
         weight_decay=script_args.weight_decay,
         evaluation_strategy="steps",
-        eval_steps=eval_steps,
+        eval_steps=0.1,
         save_strategy="steps",
         save_steps=10000,
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,
@@ -596,8 +593,8 @@ if __name__ == "__main__":
     peft_config = LoraConfig(
         task_type=task_type,
         inference_mode=False,
-        r=8,
-        lora_alpha=32,
+        r=128, # 128 TODO
+        lora_alpha=256, # 256
         lora_dropout=0.1,
     )
 
@@ -613,20 +610,34 @@ if __name__ == "__main__":
         # We multiply the final linear layer's weights by 0.01 because this seems to
         # significantly stabilize training and lead to better optimization of the loss.
         model.score.weight.data *= 0.01
+
+        contexts_model = AutoModelForSequenceClassification.from_pretrained(
+            script_args.model_name, num_labels=embed_dim, torch_dtype=torch.bfloat16
+        )
+        contexts_model.score.weight.data *= 0.01
     else:
         model = AutoModelForCausalLM.from_pretrained(
+            script_args.model_name, torch_dtype=torch.bfloat16
+        )
+
+        contexts_model = AutoModelForCausalLM.from_pretrained(
             script_args.model_name, torch_dtype=torch.bfloat16
         )
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
 
+    contexts_model = get_peft_model(contexts_model, peft_config)
+    contexts_model.print_trainable_parameters()
+
     # Need to do this for GPT2 and Llama because they don't have official pad tokens.
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.pad_token_id = tokenizer.eos_token_id
     model.config.pad_token_id = tokenizer.pad_token_id
+    contexts_model.config.pad_token_id = tokenizer.pad_token_id
     tokenizer.padding_side = "right"
 
     model.config.use_cache = not script_args.gradient_checkpointing
+    contexts_model.config.use_cache = not script_args.gradient_checkpointing
     num_proc = 24  # Can adjust to be higher if you have more processors.
     original_columns = train_dataset.column_names
 
@@ -653,10 +664,11 @@ if __name__ == "__main__":
     # Train the model.
     latent_dim = script_args.latent_dim
     hidden_dim = script_args.hidden_dim
-    vae_model = VAEModel(embed_dim, hidden_dim, latent_dim, model,
+    vae_model = VAEModel(embed_dim, hidden_dim, latent_dim, model, contexts_model,
                          fixed_contexts=script_args.fixed_contexts,
                          fixed_llm_embeddings=script_args.fixed_llm_embeddings,
-                         use_causal_lm=script_args.use_causal_lm,)
+                         use_causal_lm=script_args.use_causal_lm,
+                         use_attention_layer=script_args.use_attention_layer,)
 
     trainer = trainer_class(
         model=vae_model,
