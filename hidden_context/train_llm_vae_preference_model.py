@@ -147,23 +147,58 @@ class ScriptArguments:
         metadata={"help": "Whether to run eval after the first step"},
     )
     log_dir: str = field(default="data/reward_models/hh_rlhf")
-    kl_loss_weight: float = field(default=0.01)
-    latent_dim: int = field(default=512)    # todo: 64
-    hidden_dim: int = field(default=512)    # todo: 256
-    embed_dim: int = field(default=1024)
-    use_annealing: bool = field(default=True)
-    controversial_only: bool = field(default=False)
-    fixed_contexts: bool = field(default=False)
-    fixed_llm_embeddings: bool = field(default=False)
+    kl_loss_weight: float = field(default=0.01, metadata={"help": "weight for KLD loss"})
+    latent_dim: int = field(default=512, metadata={"help": "dimension of latent user vector"})    # todo: 64
+    hidden_dim: int = field(default=512, metadata={"help": "dimension of hidden layer in vae"})    # todo: 256
+    embed_dim: int = field(default=1024, metadata={"help": "dimension of LLM embeddings"})
+    use_annealing: bool = field(default=True, metadata={"help": "Whether to use annealing for learning rate"})
+    fixed_contexts: bool = field(
+        default=False,
+        metadata={"help": "whether to use pre-calculated embeddings for contexts (encoder inputs)"}
+    )
+    fixed_llm_embeddings: bool = field(
+        default=False,
+        metadata={"help": "whether to use pre-calculated embeddings for decoder inputs"}
+    )
     seed: int = field(default=0)
-    use_causal_lm: bool = field(default=False)
-    up_sampling: bool = field(default=False)
-    other_subsets: str = field(default=None)
-    use_last_token_embedding: bool = field(default=False)
-    use_attention_layer: bool = field(default=False)
-    one_user: str = field(default=None)
-    concat_contexts: bool = field(default=False)
-    use_transformer: bool = field(default=False)
+    controversial_only: bool = field(
+        default=False,
+        metadata={"help": "whether to only include controversial data"}
+    )
+    up_sampling: bool = field(
+        default=False,
+        metadata={"help": "whether to upsample controversial data during training phase"}
+    )
+    one_user: str = field(
+        default=None,
+        metadata={"help": "whether to only train and evaluate on one single user"}
+    )
+    other_subsets: str = field(
+        default=None,
+        metadata={"help": "specify the group of subsets if not using helpful/harmless. You can choose between"
+                          "ultra_feedback, pos_neg, set, single."},
+
+    )
+    use_causal_lm: bool = field(
+        default=False,
+        metadata={"help": "whether to use CausalLM embeddings"}
+    )
+    use_last_token_embedding: bool = field(
+        default=False,
+        metadata={"help": "whether to use the last token embedding of last layer as LLM embeddings"}
+    )
+    use_attention_layer: bool = field(
+        default=False,
+        metadata={"help": "whether to use the attention layer over last layer as LLM embeddings"}
+    )
+    concat_contexts: bool = field(
+        default=False,
+        metadata={"help": "whether to concatenate contexts within prompts during preprocessing"}
+    )
+    use_transformer: bool = field(
+        default=False,
+        metadata={"help": "whether to use transformer to encode contexts"}
+    )
 
 
 class HHRLHFPreprocessor(object):
