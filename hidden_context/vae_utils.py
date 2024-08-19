@@ -2,8 +2,6 @@ import math
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, SequentialSampler, Sampler, RandomSampler
-from typing import Sized, Optional, Iterator
 import torch.nn as nn
 from transformers import Trainer, EvalPrediction
 import wandb
@@ -137,8 +135,6 @@ class VAEModel(nn.Module):
         seq_start_end,
         user_type,
         ground_truth_user_vector=False,
-        mask_chosen=None,
-        mask_rejected=None,
     ):
         pair_embed = self.encode_pair(context_chosen, context_rejected)
         mean, log_var = self.encode_sequence(pair_embed, seq_start_end)
