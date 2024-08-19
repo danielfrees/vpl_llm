@@ -151,6 +151,10 @@ class ScriptArguments:
     seed: int = field(default=0)
     up_sampling: bool = field(default=False)
     other_subsets: str = field(default=None)
+    one_user: str = field(
+        default=None,
+        metadata={"help": "whether to only train and evaluate on one single user"}
+    )
 
 
 class HHRLHFPreprocessor(object):
@@ -390,6 +394,8 @@ def get_hh_rlhf_dataset(
             subsets = [str(i) for i in range(1, 16)]
         elif other_subsets == 'single':
             subsets = ['8', '4', '2', '1']
+        elif other_subsets == '84':
+            subsets = ['8', '4']
         else:
             subsets = []
         for subset in subsets:
@@ -457,6 +463,11 @@ if __name__ == "__main__":
         eval_dataset = eval_dataset.filter(lambda example: example['controversial'] == True)
     elif script_args.up_sampling:
         train_dataset = up_sample_controversial(train_dataset, seed)
+        eval_dataset = up_sample_controversial(eval_dataset, seed)
+    
+    if script_args.one_user:
+        train_dataset = train_dataset.filter(lambda example: example['data_subset'] == script_args.one_user)
+        eval_dataset = eval_dataset.filter(lambda example: example['data_subset'] == script_args.one_user)
 
     reward_model_type = cast(RewardModelType, script_args.reward_model_type)
 
@@ -473,7 +484,8 @@ if __name__ == "__main__":
         output_name += f"_{script_args.num_atoms}_{script_args.entropy_coeff}"
     elif reward_model_type == "mean_and_variance":
         output_name += f"_{script_args.variance_penalty}"
-
+    
+    output_name += f"_seed{script_args.seed}"
     trainer_kwargs: Dict[str, Any] = {}
     if script_args.lr_scheduler_type == "step":
         lr_scheduler_type = "constant"
@@ -516,7 +528,7 @@ if __name__ == "__main__":
         if script_args.tokenizer_name is not None
         else script_args.model_name
     )
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True, add_eos_token=False)
 
     peft_config = LoraConfig(
         task_type=TaskType.SEQ_CLS,

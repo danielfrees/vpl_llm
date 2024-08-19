@@ -8,10 +8,10 @@ import random
 from transformers import (
     HfArgumentParser,
     AutoTokenizer,
-    AutoModel,
-    AutoConfig,
     AutoModelForSequenceClassification,
     AutoModelForCausalLM,
+    AutoConfig,
+    AutoModel
 )
 
 import torch
@@ -22,12 +22,14 @@ from hidden_context.train_llm_preference_model import (
     concatenate_datasets,
     HHRLHFPreprocessor,
 )
+from datasets import load_dataset
 
 from copy import deepcopy
 
 import numpy as np
 
 import sys, ipdb, traceback
+
 
 def info(type, value, tb):
     traceback.print_exception(type, value, tb)
@@ -101,6 +103,12 @@ class ScriptArguments:
     )
     use_causal_lm: bool = field(default=False)
     other_subsets: str = field(default=None)
+    survey_size: int = field(default=8)
+    context_length: int = field(default=8)
+    controversial_only: bool = field(default=True)
+    num_duplicates: int = field(default=1)
+    fixed_context_length: bool = field(default=False)
+    random_contexts: bool = field(default=False)
 
 
 def generate_embeddings_with_llm(args, input_dataset=None):
@@ -117,7 +125,6 @@ def generate_embeddings_with_llm(args, input_dataset=None):
             use_subset_as_dir=True,
             other_subsets=args.other_subsets,
         )
-
     if args.model_type == "gpt2":
         tokenizer = AutoTokenizer.from_pretrained("gpt2", use_auth_token=True)
         if not args.use_causal_lm:
@@ -162,17 +169,16 @@ def generate_embeddings_with_llm(args, input_dataset=None):
         )
         model = model.merge_and_unload()  # This can take several minutes on cpu
         model = LLM2Vec(model, tokenizer, pooling_mode="mean", max_length=4096)
-
     else:
         return input_dataset
     model.to("cuda")
-
+    
     if not args.model_type == "llm2vec":
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
+        model.config.pad_token_id = tokenizer.pad_token_id
         tokenizer.padding_side = "right"
 
-        model.config.pad_token_id = tokenizer.pad_token_id
         dataset_size = len(input_dataset)
         print(dataset_size)
 
@@ -181,11 +187,12 @@ def generate_embeddings_with_llm(args, input_dataset=None):
             batched=True,
             num_proc=24,
             remove_columns=input_dataset.column_names,
+            load_from_cache_file=False,
         )
 
         input_dataset = input_dataset.filter(
             lambda example, idx: len(preprocessed_dataset[idx]["input_ids_chosen"]) <= args.max_length
-                                 and len(preprocessed_dataset[idx]["input_ids_rejected"]) <= args.max_length,
+                                and len(preprocessed_dataset[idx]["input_ids_rejected"]) <= args.max_length,
             with_indices=True
         )
         preprocessed_dataset = preprocessed_dataset.filter(
@@ -222,30 +229,12 @@ def generate_embeddings_with_llm(args, input_dataset=None):
                 prompts = []
             if row_id == dataset_size - 1:
                 break
-            # string = 'This is laughing laugh'
-            # a = re.search(r'\b(laugh)\b', string)
-            # print(a.start())
-
             chosen_prompt = preprocessed_dataset[row_id]["chosen"]
             rejected_prompt = preprocessed_dataset[row_id]["rejected"]
-            # cr_index = re.search('Assistant', chosen).start()
-            # prompt = chosen[:cr_index]
-            # cr = chosen[cr_index:]
-            # rejected = preprocessed_dataset[row_id]["rejected"]
-            # rj_index = re.search('Assistant', rejected).start()
-            # rj = rejected[rj_index:]
-            # # rejected_prompt = preprocessed_dataset[row_id][f"rejected"]
-            # prompt = f"{prompt} \nChosen Response: {cr} \nRejected Response: {rj}"
             instruction = "Given a prompt and response reason if the response is truthful, honest, instruction following or helpful. "
 
             prompts.append([instruction, chosen_prompt])
             prompts.append([instruction, rejected_prompt])
-            # print(prompt)
-            # import pdb; pdb.set_trace()
-            # temp = model.encode([[instruction, prompt]])
-            # temp = torch.nn.functional.normalize(temp, p=2, dim=1)
-            # emb[f"embedding_chosen"] = temp
-            # emb[f"embedding_rejected"] = temp
         else:
             emb = dict()
             for key in ['chosen', 'rejected']:
@@ -280,49 +269,61 @@ def generate_embeddings_with_llm(args, input_dataset=None):
                         mean_pooling = torch.sum(masked_last_hidden_state, dim=1) / token_length
                         emb[f"embedding_{key}"] = mean_pooling[0].float().cpu().numpy()
             embeddings.append(emb)
-    if 'embeddings' in input_dataset.column_names:
-        input_dataset = input_dataset.remove_columns("embeddings")
     output_dataset = input_dataset.add_column("embeddings", embeddings)
-    with open("embeddings.pkl", "wb") as fout:
-        import pickle
-        pickle.dump(embeddings, fout)
     return output_dataset
 
 
-def generate_contexts(args, input_dataset):
+def generate_contexts(args, input_dataset, survey_dataset):
     output_dir = os.path.join(args.output_dir, f"{args.model_type}", f"{args.data_subset}")
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-
+    import ipdb; ipdb.set_trace()
+    if args.controversial_only:
+        input_dataset = input_dataset.filter(lambda x: x['controversial'] == True)
     dataset_size = len(input_dataset)
-
-    K = 1  # repeat samples for K times
+    if args.data_split == 'train':
+        K = args.num_duplicates  # repeat samples for K times
+    else:
+        K = 1
     dataset_list = list()
-    for idx in range(K):
-        context_dataset = deepcopy(input_dataset)
-        # context_lengths = np.random.randint(1, 5, size=dataset_size).tolist()
-        context_lengths = [8] * dataset_size
-        if "context_length" in context_dataset.column_names:
-            context_dataset = context_dataset.remove_columns("context_length")
-        context_dataset = context_dataset.add_column("context_length", context_lengths)
-        contexts = list()
-        for row_id in tqdm(range(dataset_size)):  # iterate over all samples in original dataset
-            row_contexts = list()
-            num_context = 0
-            controversial_subset = input_dataset.filter(lambda example: example['controversial'] == True)
-            controversial_size = len(controversial_subset)
-            while num_context < context_lengths[row_id]:
-                if args.add_controversial:
-                    random_id = np.random.randint(controversial_size)
-                    context_id = controversial_subset[random_id]['Index']
-                    context_data = controversial_subset[random_id]
+
+    def random_choice(max_context_length, survey_size):
+        if max_context_length <= survey_size:
+            from functools import reduce
+            while True:
+                if args.fixed_context_length:
+                    context_length = max_context_length
                 else:
-                    random_id = np.random.randint(dataset_size)  # sample a context from the original dataset
-                    context_id = input_dataset[random_id]['Index']
-                    context_data = input_dataset[random_id]
-                if not args.synthetic_dataset:
-                    if input_dataset[row_id]['prompt'] == context_data['prompt']:
-                        continue
+                    if args.other_subsets == '84':
+                        context_length = random.randint(1, max_context_length)
+                    else:
+                        context_length = random.randint(2, max_context_length)
+                context_chosen_ids = np.random.choice(survey_size, context_length, replace=False)
+                chosen_dataset = [d for idx, d in enumerate(survey_dataset) if idx in context_chosen_ids]
+                if args.other_subsets != 'single':
+                    return chosen_dataset, context_length
+                satisfied_sets = list()
+                for row in chosen_dataset:
+                    satisfied_sets.append(set(row["satisfied_subset"]))
+                if len(reduce(lambda x, y: x.intersection(y), satisfied_sets)) == 1:
+                    return chosen_dataset, context_length
+                elif context_length == survey_size:
+                    raise ValueError("Please choose another random seed!")
+        else:
+            raise ValueError("Context length is larger than survey size!")
+
+    for idx in range(K):
+        output_dataset = deepcopy(input_dataset)
+        context_lengths = list()
+        contexts = list()
+        for _ in tqdm(range(dataset_size)):  # iterate over all samples in original dataset
+            row_contexts = list()
+
+            context_dataset, context_length = random_choice(args.context_length, args.survey_size)
+            context_lengths.append(context_length)
+            for context_row in context_dataset:
+                context_id = context_row["Index"]
+                context_data = context_row
                 if not args.with_embeddings:
                     row_contexts.append({
                         'original_id': context_id,
@@ -335,16 +336,14 @@ def generate_contexts(args, input_dataset):
                         'embedding_chosen': context_data['embeddings']['embedding_chosen'],
                         'embedding_rejected': context_data['embeddings']['embedding_rejected'],
                     })
-                num_context += 1
             contexts.append(row_contexts)
-        if 'contexts' in context_dataset.column_names:
-            context_dataset = context_dataset.remove_columns("contexts")
-        context_dataset = context_dataset.add_column("contexts", contexts)
-        dataset_list.append(context_dataset)
-
-    output_dataset = concatenate_datasets(dataset_list)
-    output_dataset.to_json(os.path.join(output_dir, f"{args.data_split}.jsonl"))
-    return output_dataset
+        output_dataset = output_dataset.add_column("context_length", context_lengths)
+        output_dataset = output_dataset.add_column("contexts", contexts)
+        output_dataset.map()
+        dataset_list.append(output_dataset)
+    output = concatenate_datasets(dataset_list)
+    output.to_json(os.path.join(output_dir, f"{args.data_split}.jsonl"))
+    return output
 
 
 if __name__ == "__main__":
@@ -358,7 +357,19 @@ if __name__ == "__main__":
     script_args: ScriptArguments = parser.parse_args_into_dataclasses()[0]
     print(script_args)
     dataset = generate_embeddings_with_llm(script_args)
-    generate_contexts(script_args, dataset)
+    if not script_args.random_contexts:
+        survey_options = dataset.filter(lambda x: x['survey_options'] == True)
+    else:
+        survey_options = dataset.filter(lambda x: x['survey_options'] == True or x['survey_options'] == False)
+    survey_ids = np.random.choice(range(len(survey_options)), script_args.survey_size, replace=False)
+    print(survey_ids)
+    if script_args.data_split == "train":
+        survey_data = survey_options.filter(lambda example, idx: idx in survey_ids, with_indices=True)
+        survey_data.to_json(os.path.join(script_args.data_path, script_args.data_subset, "survey_{}.jsonl".format(script_args.survey_size)))
+    else:
+        survey_data = load_dataset('json' , data_files=os.path.join(script_args.data_path, script_args.data_subset, "survey_{}.jsonl".format(script_args.survey_size)))
+        survey_data = survey_data['train']
+    generate_contexts(script_args, dataset, survey_data)
 
 # python -m hidden_context.data_utils.data_processing --output_dir data/relabeled_hh_rlhf_in_context_fixed/
 # --data_path data/relabeled_hh_rlhf --data_subset helpful --data_split train --model_type gpt2

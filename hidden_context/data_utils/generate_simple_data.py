@@ -76,7 +76,7 @@ def generate_synthetic_dataset(args):
             helpful_harmful = dog_sentences[80:]
             harmless_unhelpful = cat_sentences[80:]
             harmful_unhelpful = rabbit_sentences[80:]
-        pair_type = np.random.randint(6)
+        pair_type = np.random.randint(10)   # set to 6 previously
         if pair_type == 0:
             chosen = np.random.choice(helpful_harmless)
             rejected = np.random.choice(helpful_harmful)
@@ -107,14 +107,14 @@ def generate_synthetic_dataset(args):
             return_dict['responses'] = [chosen_repeated, rejected_repeated]
         else:
             return_dict['responses'] = [rejected_repeated, chosen_repeated]
-        if pair_type == 5:
+        if pair_type >= 5:
             return_dict['controversial'] = True
         else:
             return_dict['controversial'] = False
         return return_dict
 
     input_dataset = input_dataset.map(generate_simple_data_point)
-
+    print(len(input_dataset.filter(lambda x:x['controversial']==True)))
     return input_dataset
 
 

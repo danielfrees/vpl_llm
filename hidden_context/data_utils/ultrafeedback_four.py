@@ -39,41 +39,25 @@ def get_user_type(chosen_ratings, rejected_ratings, augment_type, users):
         rejected_rating_values.append(rejected_ratings[key])
     chosen_values = np.asarray(chosen_rating_values)
     rejected_values = np.asarray(rejected_rating_values)
-    has_equal = True in list(chosen_values == rejected_values)
+    is_equal = list(chosen_values == rejected_values)
     if augment_type == 'single':
         data_subsets = ['8', '4', '2', '1']
-        reversed_labels = list(random_greater_than_zero(rejected_values - chosen_values))
-        return data_subsets, reversed_labels, has_equal
-    elif augment_type == 'set':
-        data_subsets = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15']
-        preferences = np.array([users[user] for user in data_subsets])
-        reversed_labels = list(random_greater_than_zero(np.dot(preferences, rejected_values - chosen_values)))
-        return data_subsets, reversed_labels, has_equal
-    elif augment_type == 'pos_neg':
-        user_orig = np.ones(4, dtype=int) * (random_greater_than_zero(chosen_values - rejected_values))
-        user_rev = 1 - user_orig
-        data_subsets = [array_to_type(user_orig), array_to_type(user_rev)]
-        reversed_labels = [False, True]
-        return data_subsets, reversed_labels, has_equal
-    elif augment_type == '84':
-        data_subsets = ['8', '4']
-        has_equal = (chosen_values == rejected_values)[0] or (chosen_values == rejected_values)[1]
-        reversed_labels = list(random_greater_than_zero(rejected_values - chosen_values))
-        reversed_labels = [reversed_labels[0], reversed_labels[1]]
-        return data_subsets, reversed_labels, has_equal
+        reversed_labels = {data_subsets[idx]: list(random_greater_than_zero(rejected_values - chosen_values))[idx] for idx in range(len(data_subsets))}
+        is_equal = {data_subsets[idx]: is_equal[idx] for idx in range(len(data_subsets))}
+        return data_subsets, reversed_labels, is_equal
     else:
         raise ValueError('Invalid augment_type')
 
 
-def inner_join(original, binarized, augment_type, users, two_two_only=False, filter_equal=False):
+def inner_join(original, binarized, augment_type, users, filter_equal=True):
     agreed_counter = 0
     controversial_counter = 0
-    three_one_counter = 0
-    two_two_counter = 0
-    one_three_counter = 0
     keys = ['helpfulness', 'honesty', 'instruction_following', 'truthfulness']
+    num_users = len(users.keys())
+    user_counter = {key: 0 for key in users.keys()}
     reversed_counter = {key: 0 for key in users.keys()}
     dumb_baseline = {key: 0 for key in users.keys()}
+    dumb_controversial_baseline = {key: 0 for key in users.keys()}
     orig_idx = 0
     out_idx = 0
     dataset_dict = {
@@ -85,6 +69,7 @@ def inner_join(original, binarized, augment_type, users, two_two_only=False, fil
         'data_subset': list(),
         'controversial': list(),
         'reversed': list(),
+        'satisfied_subset': list(),
         'survey_options': list(),
     }
     for bin_idx in range(len(binarized)):
@@ -117,93 +102,76 @@ def inner_join(original, binarized, augment_type, users, two_two_only=False, fil
                 continue
         if not flag or len(chosen_ratings) != 4 or len(rejected_ratings) != 4:
             continue
-        data_subsets, reversed_labels, has_equal = get_user_type(chosen_ratings, rejected_ratings, augment_type, users)
-        if has_equal and filter_equal:
-            continue
-        if two_two_only:
-            if reversed_labels.count(True) == 2:
-                two_two_counter += 1
-            elif reversed_labels.count(True) == 3:
-                one_three_counter += 1
+        data_subsets, reversed_labels, is_equal = get_user_type(chosen_ratings, rejected_ratings, augment_type, users)
+        if filter_equal:
+            reversed_labels = {key: reversed_labels[key] for key in data_subsets if not is_equal[key]}
+            data_subsets = [key for key in data_subsets if not is_equal[key]]
+            is_equal = {key: False for key in data_subsets}
+        for data_subset in users.keys():
+            if data_subset not in data_subsets:
+                dumb_baseline[data_subset] += 0.5 * len(data_subsets)
+                if True in reversed_labels.values() and False in reversed_labels.values():
+                    dumb_controversial_baseline[data_subset] += 0.5 * len(data_subsets)
                 continue
-            elif reversed_labels.count(True) == 1:
-                three_one_counter += 1
-                continue
-            else:
-                agreed_counter += 1
-                continue
-        for idx, data_subset in enumerate(data_subsets):
-            if True in reversed_labels and False in reversed_labels:
+            user_counter[data_subset] += 1
+            if True in reversed_labels.values() and False in reversed_labels.values():
+                is_controversial = True
                 controversial_counter += 1
-            if reversed_labels[idx]:
-                reversed_counter[data_subset] += 1
-                dumb_baseline[data_subset] += reversed_labels.count(True)
             else:
-                dumb_baseline[data_subset] += reversed_labels.count(False)
+                is_controversial = False
+                agreed_counter += 1
+            if reversed_labels[data_subset]:
+                reversed_counter[data_subset] += 1
+                dumb_baseline[data_subset] += list(reversed_labels.values()).count(True)
+                if is_controversial:
+                    dumb_controversial_baseline[data_subset] += list(reversed_labels.values()).count(True)
+            else:
+                dumb_baseline[data_subset] += list(reversed_labels.values()).count(False)
+                if is_controversial:
+                    dumb_controversial_baseline[data_subset] += list(reversed_labels.values()).count(False)
             dataset_dict['Index'].append(out_idx)
             dataset_dict['original_idx'].append(orig_idx)
             dataset_dict['prompt'].append(prompt)
-            if not reversed_labels[idx]:
+            if not reversed_labels[data_subset]:
                 dataset_dict['chosen'].append('Human: ' + prompt + '\n\nAssistant: ' + chosen)
                 dataset_dict['rejected'].append('Human: ' + prompt + '\n\nAssistant: ' + rejected)
             else:
                 dataset_dict['chosen'].append('Human: ' + prompt + '\n\nAssistant: ' + rejected)
                 dataset_dict['rejected'].append('Human: ' + prompt + '\n\nAssistant: ' + chosen)
             dataset_dict['data_subset'].append(data_subset)
-            dataset_dict['controversial'].append(True in reversed_labels and False in reversed_labels)
-            dataset_dict['survey_options'].append(True in reversed_labels and False in reversed_labels)
-            dataset_dict['reversed'].append(reversed_labels[idx])
+            dataset_dict['controversial'].append(is_controversial)
+            dataset_dict['reversed'].append(reversed_labels[data_subset])
+            satisfied_subset = set([key for key in users.keys() if key not in data_subsets or reversed_labels[key] == reversed_labels[data_subset]])
+            dataset_dict['satisfied_subset'].append(satisfied_subset)
+            dataset_dict['survey_options'].append(is_controversial and len(data_subsets) == 4)
             out_idx += 1
-    print(agreed_counter, three_one_counter, two_two_counter, one_three_counter)
-    print(out_idx, controversial_counter)
+    print(out_idx, agreed_counter, controversial_counter)
+    print("User counter:", user_counter)
     print("Reversed counter:", reversed_counter)
     print("Dumb baseline:", dumb_baseline)
+    print("Dumb controversial baseline:", dumb_controversial_baseline)
     return Dataset.from_dict(dataset_dict)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
-    parser.add_argument('-a', '--augment_type', type=str, default=None, help='How to augment data')
-    parser.add_argument('-c', '--controversial_only', action='store_true', help='Whether to only generate controversial data')
-    parser.add_argument('-n', '--name', type=str, default='P', help='name of dataset')
+    parser.add_argument('-a', '--augment_type', type=str, default='single', help='How to augment data')
+    parser.add_argument('-c', '--controversial_only', type=bool, default=False, help='Whether to only generate controversial data')
+    parser.add_argument('-n', '--name', type=str, default='P_4', help='name of dataset')
     args = parser.parse_args()
-    print(args.controversial_only)
     seed = args.seed
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    sixteen = {
-        '0': (0, 0, 0, 0),
-        '1': (0, 0, 0, 1),
-        '2': (0, 0, 1, 0),
-        '3': (0, 0, 1, 1),
-        '4': (0, 1, 0, 0),
-        '5': (0, 1, 0, 1),
-        '6': (0, 1, 1, 0),
-        '7': (0, 1, 1, 1),
-        '8': (1, 0, 0, 0),
-        '9': (1, 0, 0, 1),
-        '10': (1, 0, 1, 0),
-        '11': (1, 0, 1, 1),
-        '12': (1, 1, 0, 0),
-        '13': (1, 1, 0, 1),
-        '14': (1, 1, 1, 0),
-        '15': (1, 1, 1, 1),
-    }
-    if args.augment_type == 'single' or args.augment_type == '84':
+    if args.augment_type == 'single':
         user_types = {
             '8': (1, 0, 0, 0),
             '4': (0, 1, 0, 0),
             '2': (0, 0, 1, 0),
             '1': (0, 0, 0, 1),
         }
-    elif args.augment_type == 'set':
-        user_types = sixteen.copy()
-        user_types.pop('0')
-    elif args.augment_type == 'pos_neg':
-        user_types = sixteen
     else:
         raise ValueError('Invalid augment_type')
 
@@ -216,11 +184,9 @@ if __name__ == '__main__':
     test_split = binarized_cleaned['train'].filter(lambda example, idx: idx in test_ids, with_indices=True)
     print(len(train_split), len(test_split))
     print("start processing train split")
-    joined_dataset_train = inner_join(ultra_feedback['train'], train_split, args.augment_type, user_types,
-                                      two_two_only=False, filter_equal=True)
+    joined_dataset_train = inner_join(ultra_feedback['train'], train_split, args.augment_type, user_types)
     print("start processing test split")
-    joined_dataset_test = inner_join(ultra_feedback['train'], test_split, args.augment_type, user_types,
-                                     two_two_only=False, filter_equal=True)
+    joined_dataset_test = inner_join(ultra_feedback['train'], test_split, args.augment_type, user_types)
 
     output_dir = os.path.join('data', 'UltraFeedback_{}_{}'.format(args.augment_type, args.name))
     for user_type in user_types.keys():
@@ -233,11 +199,15 @@ if __name__ == '__main__':
         train_subset.to_json(os.path.join(output_dir, user_type, 'train.jsonl'))
         test_subset.to_json(os.path.join(output_dir, user_type, 'test.jsonl'))
 
-# python -m hidden_context.data_utils.ultrafeedback_augment -a single
-
 # 60917
-# 243332 122776
-# {'8': 9163, '4': 10459, '2': 8274, '1': 14910}
-# {'8': 192810, '4': 194090, '2': 195842, '1': 187890}
-
-
+# 54826 6091
+# start processing train split
+# 162000 130930 31070
+# User counter: {'8': 45399, '4': 40146, '2': 44777, '1': 31678}
+# Reversed counter: {'8': 3625, '4': 2128, '2': 2488, '1': 1771}
+# Dumb baseline: {'8': 140288.0, '4': 138807.0, '2': 142478.5, '1': 129144.5}
+# start processing test split
+# 18122 14812 3310
+# User counter: {'8': 5082, '4': 4530, '2': 4992, '1': 3518}
+# Reversed counter: {'8': 365, '4': 247, '2': 292, '1': 188}
+# Dumb baseline: {'8': 15823.0, '4': 15614.0, '2': 15985.5, '1': 14507.5}

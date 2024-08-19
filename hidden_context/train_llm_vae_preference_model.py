@@ -13,6 +13,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     TrainingArguments,
     AutoModelForCausalLM,
+    TrainerCallback,
 )
 from transformers.utils import PaddingStrategy
 from .vae_utils import VAETrainer, VAEModel
@@ -150,7 +151,8 @@ class ScriptArguments:
     kl_loss_weight: float = field(default=0.01, metadata={"help": "weight for KLD loss"})
     latent_dim: int = field(default=512, metadata={"help": "dimension of latent user vector"})    # todo: 64
     hidden_dim: int = field(default=512, metadata={"help": "dimension of hidden layer in vae"})    # todo: 256
-    embed_dim: int = field(default=1024, metadata={"help": "dimension of LLM embeddings"})
+    encoder_embed_dim: int = field(default=1024, metadata={"help": "dimension of LLM embeddings for encoder"})
+    decoder_embed_dim: int = field(default=1024, metadata={"help": "dimension of LLM embeddings for decoder"})
     use_annealing: bool = field(default=True, metadata={"help": "Whether to use annealing for learning rate"})
     fixed_contexts: bool = field(
         default=False,
@@ -198,6 +200,22 @@ class ScriptArguments:
     use_transformer: bool = field(
         default=False,
         metadata={"help": "whether to use transformer to encode contexts"}
+    )
+    concat_chosen_rejected: bool = field(
+        default=False,
+        metadata={"help": "whether to concatenate chosen rejected contexts during preprocessing"}
+    )
+    llm2vec: bool = field(
+        default=False,
+        metadata={"help": "whether to use LLM2vec embeddings"}
+    )
+    gpt2_embeddings: bool = field(
+        default=False,
+        metadata={"help": "whether to use GPT2 embeddings"}
+    )
+    llama_embeddings: bool = field(
+        default=False,
+        metadata={"help": "whether to use LLAMA embeddings"}
     )
 
 
@@ -281,6 +299,23 @@ class HHRLHFPreprocessor(object):
                     "contexts_attention_mask": tokenized_full_contexts["attention_mask"],
                 })
                 max_length = max(max_length, len(tokenized_full_contexts["input_ids"]))
+            elif self.args.concat_chosen_rejected:
+                tokenized_context = []
+                for context in contexts:
+                    prompt = "The following chosen / rejected pair is collected from a user. Please use it to estimate the user's preference. "
+                    chosen, rejected = context["chosen"], context["rejected"]
+                    tokenized_fused = self.tokenizer(
+                        "{}\nChosen: {}\nRejected: {}".format(prompt, chosen, rejected),
+                        **self.tokenizer_kwargs
+                    )
+                    tokenized_context.append(
+                        {
+                            "input_ids_fused": tokenized_fused["input_ids"],
+                            "attention_mask_fused": tokenized_fused["attention_mask"],
+                        }
+                    )
+                    max_length = max(max_length, len(tokenized_fused["input_ids"]))
+                new_examples["contexts_tokens"].append(tokenized_context)
             else:
                 tokenized_context = []
                 # Tokenize the contexts.
@@ -332,7 +367,7 @@ class RewardDataCollatorWithPadding:
                 subsets = [str(i) for i in range(16)]
             elif self.args.other_subsets == 'set':
                 subsets = [str(i) for i in range(1, 16)]
-            elif self.args.other_subsets == 'single':
+            elif self.args.other_subsets == 'single' or self.args.other_subsets == '84':
                 subsets = ['8', '4', '2', '1']
             else:
                 subsets = []
@@ -445,6 +480,79 @@ class RewardDataCollatorWithPadding:
                 "user_type": user_type,
             }
 
+        if script_args.concat_chosen_rejected:
+            batch_size = len(features)
+            features_chosen = []
+            features_rejected = []
+            contexts_features_fused = []
+            contexts_lengths = [0]
+            for feature in features:
+                features_chosen.append(
+                    {
+                        "input_ids": feature["input_ids_chosen"],
+                        "attention_mask": feature["attention_mask_chosen"],
+                    }
+                )
+                features_rejected.append(
+                    {
+                        "input_ids": feature["input_ids_rejected"],
+                        "attention_mask": feature["attention_mask_rejected"],
+                    }
+                )
+
+                # Creating a flattened list of contexts.
+                contexts_features_fused.extend(
+                    [
+                        {
+                            "input_ids": context["input_ids_fused"],
+                            "attention_mask": context["attention_mask_fused"],
+                        }
+                        for context in feature["contexts_tokens"]
+                    ]
+                )
+                # Keep track of the start and end of each sequence.
+                contexts_lengths.append(len(feature["contexts_tokens"]))
+
+            batch = self.tokenizer.pad(
+                features_chosen + features_rejected + contexts_features_fused,
+                padding=self.padding,
+                max_length=self.max_length,
+                pad_to_multiple_of=self.pad_to_multiple_of,
+                return_tensors=self.return_tensors,
+            )
+
+            input_ids = batch["input_ids"][:2 * batch_size].view(
+                2, batch_size, batch["input_ids"].shape[-1]
+            )
+            attention_mask = batch["attention_mask"][:2 * batch_size].view(
+                2, batch_size, batch["attention_mask"].shape[-1]
+            )
+
+            contexts_lengths = torch.cumsum(torch.tensor(contexts_lengths), dim=0)
+            seq_start_end = torch.stack(
+                [contexts_lengths[:-1], contexts_lengths[1:]], dim=1
+            )
+            user_type = [user_mapping[feature["user_type"]] for feature in features]
+            assert len(seq_start_end) == batch_size
+            context_ids = batch["input_ids"][2 * batch_size:].view(
+                1, contexts_lengths[-1], batch["input_ids"].shape[-1]
+            )
+            context_attention_mask = batch["attention_mask"][2 * batch_size:].view(
+                1, contexts_lengths[-1], batch["attention_mask"].shape[-1]
+            )
+
+            return {
+                "input_ids_chosen": input_ids[0],
+                "attention_mask_chosen": attention_mask[0],
+                "input_ids_rejected": input_ids[1],
+                "attention_mask_rejected": attention_mask[1],
+                "contexts_input_ids_fused": context_ids[0],
+                "contexts_attention_mask_fused": context_attention_mask[0],
+                "seq_start_end": seq_start_end,
+                "return_loss": True,
+                "user_type": user_type,
+            }
+
         batch_size = len(features)
         features_chosen = []
         features_rejected = []
@@ -537,6 +645,17 @@ def up_sample_controversial(dataset, seed):
     return up_sampled_dataset
 
 
+def customized_optimizer(model, lr):
+    encoder_params = [p for p in model.parameters() if p not in model.decoder.parameters()]
+    decoder_params = [p for p in model.parameters() if p in model.decoder.parameters()]
+    grouped_parameters = [
+        {'params': encoder_params, 'lr': lr},
+        {'params': decoder_params, 'lr': lr / 10},
+    ]
+    return
+
+
+
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args: ScriptArguments = parser.parse_args_into_dataclasses()[0]
@@ -551,9 +670,17 @@ if __name__ == "__main__":
 
     if script_args.use_causal_lm or script_args.use_last_token_embedding or script_args.use_attention_layer:
         if script_args.model_name == 'gpt2':
-            script_args.embed_dim = 768
+            script_args.decoder_embed_dim = 768
+            script_args.encoder_embed_dim = 768
         if script_args.model_name == 'meta-llama/Llama-2-7b-hf':
-            script_args.embed_dim = 4096
+            script_args.decoder_embed_dim = 4096
+            script_args.encoder_embed_dim = 4096
+    if script_args.llm2vec:
+        script_args.encoder_embed_dim = 4096
+    elif script_args.gpt2_embeddings:
+        script_args.encoder_embed_dim = 768
+    elif script_args.llama_embeddings:
+        script_args.encoder_embed_dim = 4096
 
     data_subset = cast(DataSubset, script_args.data_subset)
     train_dataset = get_hh_rlhf_dataset(
@@ -580,6 +707,8 @@ if __name__ == "__main__":
     if script_args.one_user:
         train_dataset = train_dataset.filter(lambda example: example['data_subset'] == script_args.one_user)
         eval_dataset = eval_dataset.filter(lambda example: example['data_subset'] == script_args.one_user)
+    # train_dataset = train_dataset.filter(lambda example: example['data_subset'] in ['8', '1'])
+    # eval_dataset = eval_dataset.filter(lambda example: example['data_subset'] in ['8', '1'])
     reward_model_type = cast(RewardModelType, script_args.reward_model_type)
 
     # Define the training args. Needs to be done before the model is loaded if you
@@ -591,7 +720,7 @@ if __name__ == "__main__":
         f"__{script_args.train_dataset_size}_{script_args.learning_rate}"
         f"_{script_args.lr_scheduler_type}_{script_args.num_train_epochs}"
     )
-    output_name += f"_{script_args.kl_loss_weight}_{script_args.latent_dim}_{script_args.embed_dim}"
+    output_name += f"_{script_args.kl_loss_weight}_{script_args.latent_dim}_{script_args.decoder_embed_dim}_seed{script_args.seed}"
 
     trainer_kwargs: Dict[str, Any] = {}
     if script_args.lr_scheduler_type == "step":
@@ -611,7 +740,7 @@ if __name__ == "__main__":
         num_train_epochs=script_args.num_train_epochs,
         weight_decay=script_args.weight_decay,
         evaluation_strategy="steps",
-        eval_steps=0.1,
+        eval_steps=0.05,
         save_strategy="steps",
         save_steps=10000,
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,
@@ -635,7 +764,7 @@ if __name__ == "__main__":
         if script_args.tokenizer_name is not None
         else script_args.model_name
     )
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True, add_eos_token=False)
 
     if not script_args.use_causal_lm:
         task_type = TaskType.SEQ_CLS
@@ -652,46 +781,52 @@ if __name__ == "__main__":
     torch.set_anomaly_enabled(True)
 
     trainer_class = trainer_classes[reward_model_type]
-    embed_dim = script_args.embed_dim
+    decoder_embed_dim = script_args.decoder_embed_dim
+    encoder_embed_dim = script_args.encoder_embed_dim
 
     if not script_args.use_causal_lm:
         model = AutoModelForSequenceClassification.from_pretrained(
-            script_args.model_name, num_labels=embed_dim, torch_dtype=torch.bfloat16
+            script_args.model_name, num_labels=decoder_embed_dim, torch_dtype=torch.bfloat16
         )
         # We multiply the final linear layer's weights by 0.01 because this seems to
         # significantly stabilize training and lead to better optimization of the loss.
         model.score.weight.data *= 0.01
-
-        contexts_model = AutoModelForSequenceClassification.from_pretrained(
-            script_args.model_name, num_labels=embed_dim, torch_dtype=torch.bfloat16
-        )
-        contexts_model.score.weight.data *= 0.01
+        if not script_args.fixed_contexts:
+            contexts_model = AutoModelForSequenceClassification.from_pretrained(
+                script_args.model_name, num_labels=encoder_embed_dim, torch_dtype=torch.bfloat16
+            )
+            contexts_model.score.weight.data *= 0.01
     else:
         model = AutoModelForCausalLM.from_pretrained(
             script_args.model_name, torch_dtype=torch.bfloat16
         )
-
-        contexts_model = AutoModelForCausalLM.from_pretrained(
-            script_args.model_name, torch_dtype=torch.bfloat16
-        )
+        if not script_args.fixed_contexts:
+            contexts_model = AutoModelForCausalLM.from_pretrained(
+                script_args.model_name, torch_dtype=torch.bfloat16
+            )
+            contexts_model.score.weight.data *= 0.01
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
 
-    contexts_model = get_peft_model(contexts_model, peft_config)
-    contexts_model.print_trainable_parameters()
+    if not script_args.fixed_contexts:
+        contexts_model = get_peft_model(contexts_model, peft_config)
+        contexts_model.print_trainable_parameters()
+        contexts_model.config.pad_token_id = tokenizer.pad_token_id
+        contexts_model.config.use_cache = not script_args.gradient_checkpointing
+    else:
+        contexts_model = None
 
     # Need to do this for GPT2 and Llama because they don't have official pad tokens.
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.pad_token_id = tokenizer.eos_token_id
     model.config.pad_token_id = tokenizer.pad_token_id
-    contexts_model.config.pad_token_id = tokenizer.pad_token_id
     tokenizer.padding_side = "right"
 
     model.config.use_cache = not script_args.gradient_checkpointing
-    contexts_model.config.use_cache = not script_args.gradient_checkpointing
     num_proc = 24  # Can adjust to be higher if you have more processors.
     original_columns = train_dataset.column_names
 
+    # train_dataset = train_dataset.sort("Index")
     train_dataset = train_dataset.map(
         HHRLHFPreprocessor(script_args, tokenizer),
         batched=True,
@@ -715,12 +850,13 @@ if __name__ == "__main__":
     # Train the model.
     latent_dim = script_args.latent_dim
     hidden_dim = script_args.hidden_dim
-    vae_model = VAEModel(embed_dim, hidden_dim, latent_dim, model, contexts_model,
+    vae_model = VAEModel(encoder_embed_dim, decoder_embed_dim, hidden_dim, latent_dim, model, contexts_model,
                          fixed_contexts=script_args.fixed_contexts,
                          fixed_llm_embeddings=script_args.fixed_llm_embeddings,
                          use_causal_lm=script_args.use_causal_lm,
                          use_attention_layer=script_args.use_attention_layer,
-                         use_transformer=script_args.use_transformer)
+                         use_transformer=script_args.use_transformer,
+                         concat_chosen_rejected=script_args.concat_chosen_rejected)
 
     trainer = trainer_class(
         model=vae_model,
@@ -738,6 +874,14 @@ if __name__ == "__main__":
         use_annealing=script_args.use_annealing,
         **trainer_kwargs,
     )
+
+    class EvaluateFirstStepCallback(TrainerCallback):
+        def on_step_begin(self, args, state, control, **kwargs):
+            if state.global_step == 0:
+                control.should_evaluate = True
+
+
+    trainer.add_callback(EvaluateFirstStepCallback())
 
     trainer.train(script_args.resume_from_checkpoint)
 
