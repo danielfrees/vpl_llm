@@ -150,9 +150,3 @@ results/
 wandb/
 slurm*/
 data/
-run.sh
-submit_job.sh
-evaluate.sh
-final_vae_model.pt
-llama-vae
-latent_vars
