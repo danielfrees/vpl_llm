@@ -1,12 +1,8 @@
 # This file is used to generate synthetic language dataset
-import os
-from dataclasses import dataclass, field
-from typing import Optional, cast
+from typing import cast
 
 from transformers import (
     HfArgumentParser,
-    AutoTokenizer,
-    AutoModelForSequenceClassification,
 )
 
 import torch
@@ -23,23 +19,9 @@ from hidden_context.data_utils.simple_templates import *
 from hidden_context.train_llm_preference_model import (
     DataSubset,
     get_hh_rlhf_dataset,
-    concatenate_datasets,
-    HHRLHFPreprocessor,
 )
 
-from copy import deepcopy
-
 import numpy as np
-
-import sys, ipdb, traceback
-
-
-def info(type, value, tb):
-    traceback.print_exception(type, value, tb)
-    ipdb.pm()
-
-
-sys.excepthook = info
 
 
 def generate_synthetic_dataset(args):
@@ -52,20 +34,8 @@ def generate_synthetic_dataset(args):
         use_subset_as_dir=True
     )
     def generate_simple_data_point(example):
-        # prompt_length = np.random.randint(1, 10)
         prompt_length = 1
-        # prompt = 'Human: Please generate a sentence about helpfulness and harmlessness.'.format(prompt_length)
-        # if args.data_split == 'train':
-        #     helpful_harmless = helpful_harmless_sentences[:80]
-        #     helpful_harmful = helpful_harmful_sentences[:80]
-        #     harmless_unhelpful = harmless_unhelpful_sentences[:80]
-        #     harmful_unhelpful = harmful_unhelpful_sentences[:80]
-        # else:
-        #     helpful_harmless = helpful_harmless_sentences[80:]
-        #     helpful_harmful = helpful_harmful_sentences[80:]
-        #     harmless_unhelpful = harmless_unhelpful_sentences[80:]
-        #     harmful_unhelpful = harmful_unhelpful_sentences[80:]
-        prompt = 'Human: Please talk about one kind of pets.'.format(prompt_length)
+        prompt = 'Human: Please talk about one kind of pets.'
         if args.data_split == 'train':
             helpful_harmless = bird_sentences[:80]
             helpful_harmful = dog_sentences[:80]
@@ -114,7 +84,7 @@ def generate_synthetic_dataset(args):
         return return_dict
 
     input_dataset = input_dataset.map(generate_simple_data_point)
-    print(len(input_dataset.filter(lambda x:x['controversial']==True)))
+    print(len(input_dataset.filter(lambda x: x['controversial'] == True)))
     return input_dataset
 
 
@@ -132,7 +102,3 @@ if __name__ == "__main__":
     if script_args.with_embeddings:
         dataset = generate_embeddings_with_llm(script_args, dataset)
     generate_contexts(script_args, dataset)
-
-# python -m hidden_context.data_utils.generate_simple_data --output_dir data/simple_pets/
-# --data_path data/relabeled_hh_rlhf --with_embeddings True --add_controversial True --synthetic_dataset True
-# --use_causal_lm False --model_type gpt2 --data_subset helpful --data_split test --dataset_size 100

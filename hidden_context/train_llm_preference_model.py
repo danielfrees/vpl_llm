@@ -23,16 +23,6 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import PaddingStrategy
 from typing_extensions import Literal, TypeAlias
 
-import sys, ipdb, traceback
-
-
-def info(type, value, tb):
-    traceback.print_exception(type, value, tb)
-    ipdb.pm()
-
-
-sys.excepthook = info
-
 RewardModelType: TypeAlias = Literal["base", "mean_and_variance", "categorical"]
 DataSubset: TypeAlias = Literal["both", "helpful", "harmless"]
 
@@ -388,10 +378,6 @@ def get_hh_rlhf_dataset(
     else:   # TODO: set subsets here
         if other_subsets == 'ultra_feedback':
             subsets = ['helpfulness', 'honesty', 'instruction_following', 'truthfulness']
-        elif other_subsets == 'pos_neg':
-            subsets = [str(i) for i in range(16)]
-        elif other_subsets == 'set':
-            subsets = [str(i) for i in range(1, 16)]
         elif other_subsets == 'single':
             subsets = ['8', '4', '2', '1']
         elif other_subsets == '84':

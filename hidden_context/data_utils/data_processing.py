@@ -8,8 +8,6 @@ import random
 from transformers import (
     HfArgumentParser,
     AutoTokenizer,
-    AutoModel,
-    AutoConfig,
     AutoModelForSequenceClassification,
     AutoModelForCausalLM,
 )
@@ -26,16 +24,6 @@ from hidden_context.train_llm_preference_model import (
 from copy import deepcopy
 
 import numpy as np
-
-import sys, ipdb, traceback
-
-def info(type, value, tb):
-    traceback.print_exception(type, value, tb)
-    ipdb.pm()
-
-
-sys.excepthook = info
-
 
 @dataclass
 class ScriptArguments:
@@ -87,19 +75,12 @@ class ScriptArguments:
             "help": "Whether the embeddings are generated during pre-processing."
         }
     )
-    add_controversial: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to add an extra feature which indicates whether the preference is controversial."
-        }
-    )
     synthetic_dataset: bool = field(
         default=False,
         metadata={
             "help": "Whether a synthetic dataset is used."
         }
     )
-    use_causal_lm: bool = field(default=False)
     other_subsets: str = field(default=None)
 
 
@@ -120,176 +101,72 @@ def generate_embeddings_with_llm(args, input_dataset=None):
 
     if args.model_type == "gpt2":
         tokenizer = AutoTokenizer.from_pretrained("gpt2", use_auth_token=True)
-        if not args.use_causal_lm:
-            model = AutoModelForSequenceClassification.from_pretrained(
-                "gpt2", num_labels=args.embed_dim, torch_dtype=torch.bfloat16
-            )
-            model.score.weight.data *= 0.01
-        else:
-            model = AutoModelForCausalLM.from_pretrained(
-                "gpt2", torch_dtype=torch.bfloat16
-            )
+        model = AutoModelForSequenceClassification.from_pretrained(
+            "gpt2", num_labels=args.embed_dim, torch_dtype=torch.bfloat16
+        )
+        model.score.weight.data *= 0.01
     elif args.model_type == "llama" or args.model_type == "meta-llama/Llama-2-7b-hf":
         tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf", use_auth_token=True, add_eos_token=False)
-        if not args.use_causal_lm:
-            model = AutoModelForSequenceClassification.from_pretrained(
-                "meta-llama/Llama-2-7b-hf", num_labels=args.embed_dim, torch_dtype=torch.bfloat16
-            )
-        else:
-            model = AutoModelForCausalLM.from_pretrained(
-                "meta-llama/Llama-2-7b-hf", torch_dtype=torch.bfloat16
-            )
-    elif args.model_type == "llm2vec":
-        from llm2vec import LLM2Vec
-        from peft import PeftModel
-
-        tokenizer = AutoTokenizer.from_pretrained(
-            "McGill-NLP/LLM2Vec-Mistral-7B-Instruct-v2-mntp"
+        model = AutoModelForCausalLM.from_pretrained(
+            "meta-llama/Llama-2-7b-hf", torch_dtype=torch.bfloat16
         )
-        config = AutoConfig.from_pretrained(
-            "McGill-NLP/LLM2Vec-Mistral-7B-Instruct-v2-mntp", trust_remote_code=True
-        )
-        model = AutoModel.from_pretrained(
-            "McGill-NLP/LLM2Vec-Mistral-7B-Instruct-v2-mntp",
-            trust_remote_code=True,
-            config=config,
-            torch_dtype=torch.bfloat16,
-            device_map="cuda" if torch.cuda.is_available() else "cpu",
-        )
-        model = PeftModel.from_pretrained(
-            model,
-            "McGill-NLP/LLM2Vec-Mistral-7B-Instruct-v2-mntp",
-        )
-        model = model.merge_and_unload()  # This can take several minutes on cpu
-        model = LLM2Vec(model, tokenizer, pooling_mode="mean", max_length=4096)
-
     else:
         return input_dataset
     model.to("cuda")
 
-    if not args.model_type == "llm2vec":
-        tokenizer.pad_token = tokenizer.eos_token
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-        tokenizer.padding_side = "right"
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.pad_token_id = tokenizer.eos_token_id
+    tokenizer.padding_side = "right"
 
-        model.config.pad_token_id = tokenizer.pad_token_id
-        dataset_size = len(input_dataset)
-        print(dataset_size)
+    model.config.pad_token_id = tokenizer.pad_token_id
+    dataset_size = len(input_dataset)
+    print(dataset_size)
 
-        preprocessed_dataset = input_dataset.map(
-            HHRLHFPreprocessor(tokenizer),
-            batched=True,
-            num_proc=24,
-            remove_columns=input_dataset.column_names,
-        )
+    preprocessed_dataset = input_dataset.map(
+        HHRLHFPreprocessor(tokenizer),
+        batched=True,
+        num_proc=24,
+        remove_columns=input_dataset.column_names,
+        load_from_cache_file=False,
+    )
 
-        input_dataset = input_dataset.filter(
-            lambda example, idx: len(preprocessed_dataset[idx]["input_ids_chosen"]) <= args.max_length
-                                 and len(preprocessed_dataset[idx]["input_ids_rejected"]) <= args.max_length,
-            with_indices=True
-        )
-        preprocessed_dataset = preprocessed_dataset.filter(
-            lambda example: len(example["input_ids_chosen"]) <= args.max_length
-                            and len(example["input_ids_rejected"]) <= args.max_length
-        )
-    else:
-        dataset_size = len(input_dataset)
-        preprocessed_dataset = input_dataset
+    input_dataset = input_dataset.filter(
+        lambda example, idx: len(preprocessed_dataset[idx]["input_ids_chosen"]) <= args.max_length
+                             and len(preprocessed_dataset[idx]["input_ids_rejected"]) <= args.max_length,
+        with_indices=True
+    )
+    preprocessed_dataset = preprocessed_dataset.filter(
+        lambda example: len(example["input_ids_chosen"]) <= args.max_length
+                        and len(example["input_ids_rejected"]) <= args.max_length
+    )
     print(len(input_dataset), len(preprocessed_dataset))
     dataset_size = len(preprocessed_dataset)
 
     embeddings = list()
-    batch_size = 256
-    prompts = []
-    if args.model_type == "llm2vec":
-        dataset_size += 1
     for row_id in tqdm(range(dataset_size)):
-        if args.model_type == "llm2vec":
-            if (row_id % batch_size == 0 or row_id == dataset_size - 1) and row_id > 0:
-                embs = model.encode(prompts)
-                # import pdb; pdb.set_trace()
-                embs = torch.nn.functional.normalize(embs, p=2, dim=1)
-
-                # import pdb; pdb.set_trace()
-                for batch_id in range(0, embs.shape[0], 2):
-                    # temp = torch.nn.functional.normalize(temp, p=2, dim=1)
-                    chosen_emb = embs[batch_id]
-                    rejected_emb = embs[batch_id + 1]
-                    emb = dict()
-                    emb[f"embedding_chosen"] = chosen_emb.float().cpu().numpy()
-                    emb[f"embedding_rejected"] = rejected_emb.float().cpu().numpy()
-                    embeddings.append(emb)
-                prompts = []
-            if row_id == dataset_size - 1:
-                break
-            # string = 'This is laughing laugh'
-            # a = re.search(r'\b(laugh)\b', string)
-            # print(a.start())
-
-            chosen_prompt = preprocessed_dataset[row_id]["chosen"]
-            rejected_prompt = preprocessed_dataset[row_id]["rejected"]
-            # cr_index = re.search('Assistant', chosen).start()
-            # prompt = chosen[:cr_index]
-            # cr = chosen[cr_index:]
-            # rejected = preprocessed_dataset[row_id]["rejected"]
-            # rj_index = re.search('Assistant', rejected).start()
-            # rj = rejected[rj_index:]
-            # # rejected_prompt = preprocessed_dataset[row_id][f"rejected"]
-            # prompt = f"{prompt} \nChosen Response: {cr} \nRejected Response: {rj}"
-            instruction = "Given a prompt and response reason if the response is truthful, honest, instruction following or helpful. "
-
-            prompts.append([instruction, chosen_prompt])
-            prompts.append([instruction, rejected_prompt])
-            # print(prompt)
-            # import pdb; pdb.set_trace()
-            # temp = model.encode([[instruction, prompt]])
-            # temp = torch.nn.functional.normalize(temp, p=2, dim=1)
-            # emb[f"embedding_chosen"] = temp
-            # emb[f"embedding_rejected"] = temp
-        else:
-            emb = dict()
-            for key in ['chosen', 'rejected']:
-                tokens = tokenizer.pad(
-                    {"input_ids": preprocessed_dataset[row_id][f"input_ids_{key}"]},
-                    padding=True, pad_to_multiple_of=64, return_tensors="pt"
-                )
-                token_length = len(preprocessed_dataset[row_id][f"input_ids_{key}"])
-                input_ids = tokens["input_ids"].unsqueeze(0).to("cuda")
-                attention_mask = tokens["attention_mask"].unsqueeze(0).to("cuda")
-                with torch.no_grad():
-                    if not args.use_causal_lm:
-                        # emb[f"embedding_{key}"] = model(
-                        #     input_ids=input_ids,
-                        #     attention_mask=attention_mask
-                        # )[0][0].float().cpu().numpy()
-                        # import ipdb; ipdb.set_trace()
-                        last_hidden_state = model(
-                            input_ids=input_ids,
-                            attention_mask=attention_mask,
-                            output_hidden_states=True
-                        ).hidden_states[-1]
-                        emb[f"embedding_{key}"] = last_hidden_state[0][token_length - 1].float().cpu().numpy()
-                    else:
-                        last_hidden_state = model(
-                            input_ids=input_ids,
-                            attention_mask=attention_mask,
-                            output_hidden_states=True
-                        ).hidden_states[-1]
-                        masked_last_hidden_state = last_hidden_state * attention_mask.unsqueeze(-1)
-                        token_length = torch.sum(attention_mask, dim=1)
-                        mean_pooling = torch.sum(masked_last_hidden_state, dim=1) / token_length
-                        emb[f"embedding_{key}"] = mean_pooling[0].float().cpu().numpy()
-            embeddings.append(emb)
-    if 'embeddings' in input_dataset.column_names:
-        input_dataset = input_dataset.remove_columns("embeddings")
+        emb = dict()
+        for key in ['chosen', 'rejected']:
+            tokens = tokenizer.pad(
+                {"input_ids": preprocessed_dataset[row_id][f"input_ids_{key}"]},
+                padding=True, pad_to_multiple_of=64, return_tensors="pt"
+            )
+            token_length = len(preprocessed_dataset[row_id][f"input_ids_{key}"])
+            input_ids = tokens["input_ids"].unsqueeze(0).to("cuda")
+            attention_mask = tokens["attention_mask"].unsqueeze(0).to("cuda")
+            with torch.no_grad():
+                last_hidden_state = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    output_hidden_states=True
+                ).hidden_states[-1]
+                emb[f"embedding_{key}"] = last_hidden_state[0][token_length - 1].float().cpu().numpy()
+        embeddings.append(emb)
     output_dataset = input_dataset.add_column("embeddings", embeddings)
-    with open("embeddings.pkl", "wb") as fout:
-        import pickle
-        pickle.dump(embeddings, fout)
     return output_dataset
 
 
 def generate_contexts(args, input_dataset):
+    # Generate context without survey question pool
     output_dir = os.path.join(args.output_dir, f"{args.model_type}", f"{args.data_subset}")
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -300,7 +177,6 @@ def generate_contexts(args, input_dataset):
     dataset_list = list()
     for idx in range(K):
         context_dataset = deepcopy(input_dataset)
-        # context_lengths = np.random.randint(1, 5, size=dataset_size).tolist()
         context_lengths = [8] * dataset_size
         if "context_length" in context_dataset.column_names:
             context_dataset = context_dataset.remove_columns("context_length")
@@ -312,14 +188,9 @@ def generate_contexts(args, input_dataset):
             controversial_subset = input_dataset.filter(lambda example: example['controversial'] == True)
             controversial_size = len(controversial_subset)
             while num_context < context_lengths[row_id]:
-                if args.add_controversial:
-                    random_id = np.random.randint(controversial_size)
-                    context_id = controversial_subset[random_id]['Index']
-                    context_data = controversial_subset[random_id]
-                else:
-                    random_id = np.random.randint(dataset_size)  # sample a context from the original dataset
-                    context_id = input_dataset[random_id]['Index']
-                    context_data = input_dataset[random_id]
+                random_id = np.random.randint(controversial_size)
+                context_id = controversial_subset[random_id]['Index']
+                context_data = controversial_subset[random_id]
                 if not args.synthetic_dataset:
                     if input_dataset[row_id]['prompt'] == context_data['prompt']:
                         continue
@@ -337,14 +208,12 @@ def generate_contexts(args, input_dataset):
                     })
                 num_context += 1
             contexts.append(row_contexts)
-        if 'contexts' in context_dataset.column_names:
-            context_dataset = context_dataset.remove_columns("contexts")
         context_dataset = context_dataset.add_column("contexts", contexts)
         dataset_list.append(context_dataset)
 
-    output_dataset = concatenate_datasets(dataset_list)
-    output_dataset.to_json(os.path.join(output_dir, f"{args.data_split}.jsonl"))
-    return output_dataset
+    output = concatenate_datasets(dataset_list)
+    output.to_json(os.path.join(output_dir, f"{args.data_split}.jsonl"))
+    return output
 
 
 if __name__ == "__main__":
@@ -359,6 +228,3 @@ if __name__ == "__main__":
     print(script_args)
     dataset = generate_embeddings_with_llm(script_args)
     generate_contexts(script_args, dataset)
-
-# python -m hidden_context.data_utils.data_processing --output_dir data/relabeled_hh_rlhf_in_context_fixed/
-# --data_path data/relabeled_hh_rlhf --data_subset helpful --data_split train --model_type gpt2
