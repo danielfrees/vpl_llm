@@ -27,7 +27,7 @@ pip install -r requirements.txt
 
 ## Data and Pretrained models
 
-Our datasets and checkpoints can be downloaded from [Google Drive link](https://drive.google.com/drive/folders/1bUnV4gKV8v8dWlsCIcKMtE1ZQKXF7xvH?usp=drive_link).
+Our datasets and checkpoints can be downloaded from [Google Drive link](https://drive.google.com/drive/folders/1dQ8zpNefRAtUB9TtbovOSn2MfV2Y-MbC?usp=sharing).
 
 #### Datasets
 The datasets needed for VPL experiments should be downloaded and unzipped to ``./data/``. There are three datasets in the folder: ``simple_pets``, ``P_survey_100``, and ``P_4_survey_100``.
