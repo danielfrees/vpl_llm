@@ -1,106 +1,97 @@
-# Distributional Preference Learning
+## Personalizing Reinforcement Learning from Human Feedback with Variational Preference Learning
 
-This repository contains code for the paper [Distributional Preference Learning: Understanding and Accounting for Hidden Context in RLHF](https://cassidylaidlaw.com/links/hidden-context). It includes an implementation of both variants of distributional preference learning (DPL) that we describe in the paper for training LLM-based reward models.
+####  [[Website]](https://weirdlabuw.github.io/vpl/) [[Paper]](https://arxiv.org/) 
 
-## Installation
+[Sriyash Poddar<sup>1</sup>](https://sriya.sh), [Yanming Wan<sup>1</sup>](https://wanyanming.com/), [Hamish Ivison<sup>1</sup>](https://hamishivi.github.io/), [Abhishek Gupta<sup>1</sup>](https://homes.cs.washington.edu/~abhgupta), [Natasha Jaques<sup>1</sup>](https://natashajaques.ai)<br/>
 
-1. Install Python 3.8, 3.9, 3.10, or 3.11.
-2. Clone the repository:
+<sup>1</sup>University of Washington
 
-        git clone https://github.com/cassidylaidlaw/hidden-context.git
-        cd hidden-context
+This repo is an implementation of the language experiments of VPL. VPL is a variational framework for learning from human feedback (binary preference labels) i.e. inferring a novel user-specific latent and learning reward models and policies conditioned on this latent without additional user-specific data. This is used for quick adaptation to specific user preferences without retraining the entire model or ignoring underrepresented groups.
 
-3. Install pip requirements:
+For control experiments of VPL, please refer to [here](https://github.com/WEIRDLabUW/vpl).
 
-        pip install -r requirements.txt
-
-## Data and pretrained models
-
-Our data and pretrained models are included in the repository under the `data` directory:
-
-  * `data/jailbroken_responses.jsonl`: contains the data from the [Jailbroken paper](https://arxiv.org/abs/2307.02483) which we have preprocessed for use in our experiments. Each line is a JSON object with a jailbreak prompt and two responses: one from Claude v1.3 and one from GPT-4. The first is a safe response and the second is unsafe (jailbroken).
-  * `data/relabeled_hh_rlhf`: contains the data from the [HH-RLHF](https://huggingface.co/datasets/Anthropic/hh-rlhf) dataset which we partially relabeled with GPT-3.5 according to helpfulness or harmlessness (see Appendix C in the paper). The data is in a format which is interchangeable with the original dataset.
-  * `data/reward_models`: trained reward models and their evaluation results. The reward models are trained on either the harmlessness-labeled data, the helpfulness-labeled data, or all the combined data. In each directory, the `eval_results_both.jsonl` contains the results of running the `evaluate_llm_preference_model.py` script (see experiments section below).
-      * `data/reward_models/relabeled_hh_rlhf/{helpful,harmless,both}/base_Llama-2-7b-hf*last_checkpoint`: normally-trained reward models.
-      * `data/reward_models/relabeled_hh_rlhf/{helpful,harmless,both}/mean_and_variance_Llama-2-7b-hf*last_checkpoint`: reward models trained with the mean-and-variance variant of our distributional preference learning (DPL) method.
-      * `data/reward_models/relabeled_hh_rlhf/{helpful,harmless,both}/categorical_Llama-2-7b-hf*last_checkpoint`: reward models trained with the categorical variant of our distributional preference learning (DPL) method.
-  * `data/jailbroken_evaluations_{base,categorical,mean_and_variance}.jsonl`: these contain the output of running the `evaluate_assistance_responses.py` script on the Jailbroken data (see experiments section below).
-
-## Running experiments
-
-### Synthetic data
-
-To run the distributional preference learning (DPL) experiments that use synthetic data, run
-
-    python -m hidden_context.synthetic_experiments --env 1d --batch_size 2048 --lr 0.001 --num_iterations 1000
-
-This should generate our Figure 1 in the directory `results/1d/2048_0.001_1000`.
-
-### Training LLM reward models with DPL
-
-To train a normal LLM reward model, run
-
-    python -m hidden_context.train_llm_preference_model --model_name=meta-llama/Llama-2-7b-hf --num_train_epochs=1 --reward_model_type=base --data_subset=both
-
-  * To train using DPL, specify either `--reward_model_type=mean_and_variance` or `--reward_model_type=categorical` depending on which variant you want.
-  * To train on our relabeled HH-RLHF data, add `--data_path=data/relabeled_hh_rlhf`.
-  * You can specify either `--data_subset=both`, `--data_subset=helpful`, or `--data_subset=harmless` to train on just the harmlessness-labeled data, just the helpfulness-labeled data, or all data. Note that we use 2 training epochs when training on just the harmlessness subset or just the helpfulness subset to maintain the same number of overall training steps.
-
-### Evaluating LLM reward models on HH-RLHF
-
-To evaluate an LLM reward model once it's trained, run
-
-    python -m hidden_context.evlauate_llm_preference_model --model_name=meta-llama/Llama-2-7b-hf --num_outputs=1 --reward_model_checkpoint=PATH/TO/last_checkpoint
-
-  * Replace `PATH/TO/last_checkpoint` with the checkpoint directory to evaluate.
-  * The `--num_outputs` argument should be set to 2 for mean-and-variance DPL models and to 10 for categorical DPL models. This is because these models output, respectively, 2 numbers (mean and variance) and 10 numbers (logits for each of the 10 reward buckets).
-
-This script will produce a file called `eval_results_both.jsonl` in the checkpoint folder with the raw outputs of the reward model for each of the response pairs in the HH-RLHF test set.
-
-### Evaluating LLM reward models on jailbreaks
-
-To evaluate an LLM reward model on responses to the Jailbroken prompts, run
-
-    python -m hidden_context.evaluate_assistant_responses --input=data/jailbroken_responses.jsonl --model_name=meta-llama/Llama-2-7b-hf --num_outputs=1 --reward_model_checkpoints PATH_1/TO/last_checkpoint PATH_2/TO/last_checkpoint --reward_model_names model_1 model_2 --output PATH/TO/output.jsonl
-
-  * This will load each of the given reward model checkpoints and evaluate them. The results will be saved in `PATH/TO/output.jsonl` and each reward model's outputs will be stored according to the names given after `--reward_model_names`.
-  * The `--num_outputs` argument should be set to 2 for mean-and-variance DPL models and to 10 for categorical DPL models. This is because these models output, respectively, 2 numbers (mean and variance) and 10 numbers (logits for each of the 10 reward buckets).
-
-### Analyzing evaluations
-
-To obtain the results highlighted in the paper on DPL with LLM reward models, run
-
-    python -m hidden_context.summarize_results
-
-This will load the data from our experiments (as output from the evaluation scripts above) and summarize it into the numbers we reported in the paper. This script shows how we translate the raw output of the reward models to calculate *r²* values for a DPL reward model; it also shows how we calculated risk-sensitive rewards to evaluate DPL models on the Jailbroken prompts.
-
-## Linting/formatting/type checking/testing
-
-We use a variety of tools for maintaining code quality. To run automated checks, use the following commands:
-
-    pip install --upgrade -r requirements_dev.txt
-    ./lint.sh
-    pytest
-
-## Citation
-
-If you find this repository useful for your research, please cite our paper as follows:
-
-    @inproceedings{siththaranjan2023dpl,
-      title={Distributional Preference Learning: Understanding and Accounting for Hidden Context in RLHF},
-      author={Siththaranjan, Anand and Laidlaw, Cassidy and Hadfield-Menell, Dylan},
-      booktitle={arXiv preprint},
-      year={2023}
-    }
-
-## Contact
-
-For questions about the paper or code, please contact cassidy_laidlaw@berkeley.edu or anandsranjan@berkeley.edu.
+## Instructions
 
 
-### Running experiments
+#### Setting up repo
+```
+git clone git@github.com:WEIRDLabUW/vpl_llm.git
+```
 
-slurm4 - llama baselines
-slurm5 - gpt2 baselines
+#### Install Dependencies
+```
+conda create -n vpl python=3.10
+conda activate vpl
+pip install -r requirements.txt
+```
 
-DONE: baselines + our model on OG anthropic dataset
+## Data and Pretrained models
+
+Our datasets and checkpoints can be downloaded from [Google Drive link](https://drive.google.com/drive/folders/1bUnV4gKV8v8dWlsCIcKMtE1ZQKXF7xvH?usp=drive_link).
+
+#### Datasets
+The datasets needed for VPL experiments should be downloaded and unzipped to ``./data/``. There are three datasets in the folder: ``simple_pets``, ``P_survey_100``, and ``P_4_survey_100``.
+
+#### Checkpoints
+The checkpoints for VPL experiments should be downloaded to ``./logs``. We provide the checkpoints for VPL and other baseline models over each dataset.
+
+## Dataset Generation
+We also provide the code for generating our datasets. 
+The following scripts will also give you the datasets in ``./data/``.
+#### Pets
+To generate ``./data/simple_pets``, run
+```bash
+bash generate_llm_embeddings_pets.sh gpt2
+```
+
+#### UF-P-2
+To generate ``./data/P_survey_100``, run
+```bash
+python -m hidden_context.data_utils.ultrafeedback_augment -a 84 -n P
+bash generate_llm_embeddings_UF_P_2.sh gpt2 84
+```
+
+#### UF-P-4
+To generate ``./data/P_4_survey_100``, run
+```bash
+python -m hidden_context.data_utils.ultrafeedback_augment -a single -n P_4 -c
+bash generate_llm_embeddings_UF_P_4.sh gpt2 single
+```
+
+## Running Experiments
+In all the following scripts, ``<MODEL_TYPE>`` can be chosen from ``vae``, ``base``, ``categorical``, and ``mean_and_variance``. 
+``vae`` corresponds to our VPL models, while the others are training baseline models.
+
+The results are recorded on Wandb. Please refer to ``eval/accuracy`` on Wandb page for model's performance.
+
+#### Pets
+To train models on ``./data/simple_pets``, run
+```bash
+bash submit_job_pets.sh <MODEL_TYPE>
+```
+Note that the default settings are for Pets (full), 
+please change the arguments as explained in the bash file if you want to train on Pets (controversial).
+
+#### UF-P-2
+To train models on ``./data/P_survey_100``, run
+```bash
+bash submit_job_UF_P_2.sh <MODEL_TYPE>
+```
+
+#### UF-P-4
+To train models on ``./data/P_4_survey_100``, run
+```bash
+bash submit_job_UF_P_4.sh <MODEL_TYPE>
+```
+
+## Bibtex
+If you find this code useful, please cite:
+
+```
+@article{poddar2024vpl,
+    author    = {Poddar, Sriyash and Wan, Yanming and Ivision, Hamish and Gupta, Abhishek and Jaques, Natasha},
+    title     = {Personalizing Reinforcement Learning from Human Feedback with Variational Preference Learning},
+    booktitle = {ArXiv Preprint},
+    year      = {2024},
+}
+```
