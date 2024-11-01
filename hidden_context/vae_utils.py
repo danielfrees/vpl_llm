@@ -135,6 +135,7 @@ class VAEModel(nn.Module):
         seq_start_end,
         user_type,
         ground_truth_user_vector=False,
+        **kwargs # to be fwd compatible, e.g. with mask_chosen
     ):
         pair_embed = self.encode_pair(context_chosen, context_rejected)
         mean, log_var = self.encode_sequence(pair_embed, seq_start_end)
@@ -178,13 +179,14 @@ class VAETrainer(Trainer):
     def loss(self, rewards_chosen, rewards_rejected):
         return torch.mean(self.per_sample_loss(rewards_chosen, rewards_rejected))
 
-    def compute_loss(self, wrapped_model, inputs, return_outputs=False):
+    def compute_loss(self, wrapped_model, inputs, return_outputs=False, **kwargs):
         if isinstance(wrapped_model, VAEModel):
             model = wrapped_model  # .module
         else:
             model = wrapped_model.module
         device = model.llm_encoder.device
         batch_size = inputs["seq_start_end"].shape[0]
+        # ^ could also now use num_items_in_batch from kwargs, newer vrs of transformers lib
         if model.fixed_llm_embeddings:
             embeddings_chosen = torch.tensor(inputs["embeddings_chosen"]).to(device).bfloat16()
             embeddings_rejected = torch.tensor(inputs["embeddings_rejected"]).to(device).bfloat16()

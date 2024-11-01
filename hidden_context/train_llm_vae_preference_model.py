@@ -26,6 +26,12 @@ from .train_llm_preference_model import (
     concatenate_datasets
 )
 
+from dotenv import load_dotenv
+load_dotenv() 
+HF_TOKEN = os.getenv("HUGGINGFACE_TOKEN", None)
+if not HF_TOKEN:
+    raise Exception("You must have a local .env file with HUGGINGFACE_TOKEN. Try again.")
+
 
 @dataclass
 class ScriptArguments:
@@ -596,7 +602,7 @@ if __name__ == "__main__":
         if script_args.tokenizer_name is not None
         else script_args.model_name
     )
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True, add_eos_token=False)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, token = HF_TOKEN, add_eos_token=False)
 
     peft_config = LoraConfig(
         task_type=TaskType.SEQ_CLS,

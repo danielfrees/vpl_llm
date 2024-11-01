@@ -8,3 +8,4 @@ torch
 openai==0.28.1
 matplotlib==3.7.1
 scipy==1.10.1
+scikit-learn

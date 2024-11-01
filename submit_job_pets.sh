@@ -3,6 +3,9 @@ export WANDB_PROJECT=vpl
 export NCCL_P2P_DISABLE="1"
 export NCCL_IB_DISABLE="1"
 
+source .env
+# echo "Hugging Face Token: $HUGGINGFACE_TOKEN"
+
 # Set model_name to be 'gpt2' or 'meta-llama/Llama-2-7b-hf' here
 model_name='gpt2'
 
