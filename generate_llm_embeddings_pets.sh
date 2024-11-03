@@ -1,6 +1,6 @@
 
 # Set model_type to be 'gpt2' or 'llama' here
-model_type=$1
+model_type="gpt2"
 
 # Generate Pets dataset
  python -m hidden_context.data_utils.generate_simple_data --output_dir data/simple_pets/ \

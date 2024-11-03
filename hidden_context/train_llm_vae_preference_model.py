@@ -179,6 +179,18 @@ class ScriptArguments:
         default=False,
         metadata={"help": "whether to use the last token embedding of last layer as LLM embeddings"}
     )
+    context_sample_strategy: str = field(
+        default="random",
+        metadata={"help": "Strategy for sampling context, currently only 'random' is supported. Only affects data generation process. Kept here for logging."}
+    )
+    embedding_pool_strategy: str = field(
+        default="last",
+        metadata={"help": "Strategy for pooling embeddings, options are 'last' or 'mean'. Only affects pooling during data generation. Kept here for logging."}
+    )
+    num_random_contexts: int = field(
+        default=5, 
+        metadata={"help": "Number of random contexts to sample for each example. Only affects data generation process. Kept here for logging."}
+    )
 
 class HHRLHFPreprocessor(object):
     def __init__(self, args, tokenizer, **tokenizer_kwargs):
@@ -523,19 +535,22 @@ if __name__ == "__main__":
             script_args.encoder_embed_dim = 4096
 
     data_subset = cast(DataSubset, script_args.data_subset)
+    
     train_dataset = get_hh_rlhf_dataset(
         data_subset,
         "train",
         script_args.train_dataset_size,
-        data_path=script_args.data_path,
-        other_subsets=script_args.other_subsets
+        data_path = script_args.data_path,
+        other_subsets=script_args.other_subsets,
+        use_data_subset=False
     )
     eval_dataset = get_hh_rlhf_dataset(
         data_subset,
-        "test",
+        "validation",    # "test" for the original Poddar VPL work
         script_args.eval_dataset_size,
-        data_path=script_args.data_path,
-        other_subsets=script_args.other_subsets
+        data_path = script_args.data_path,
+        other_subsets=script_args.other_subsets,
+        use_data_subset=False
     )
     print(len(train_dataset), len(eval_dataset))
     if script_args.controversial_only:
@@ -558,7 +573,7 @@ if __name__ == "__main__":
         f"__{script_args.train_dataset_size}_{script_args.learning_rate}"
         f"_{script_args.lr_scheduler_type}_{script_args.num_train_epochs}"
     )
-    output_name += f"_{script_args.kl_loss_weight}_{script_args.latent_dim}_{script_args.decoder_embed_dim}_seed{script_args.seed}"
+    output_name += f"_{script_args.kl_loss_weight}_{script_args.latent_dim}_{script_args.decoder_embed_dim}_seed{script_args.seed}_context{script_args.context_sample_strategy}_pooling{script_args.embedding_pool_strategy}_numrandom{script_args.num_random_contexts}"
 
     trainer_kwargs: Dict[str, Any] = {}
     if script_args.lr_scheduler_type == "step":

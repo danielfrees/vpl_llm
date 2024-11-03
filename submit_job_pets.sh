@@ -3,9 +3,6 @@ export WANDB_PROJECT=vpl
 export NCCL_P2P_DISABLE="1"
 export NCCL_IB_DISABLE="1"
 
-source .env
-# echo "Hugging Face Token: $HUGGINGFACE_TOKEN"
-
 # Set model_name to be 'gpt2' or 'meta-llama/Llama-2-7b-hf' here
 model_name='gpt2'
 
@@ -36,7 +33,7 @@ python -m hidden_context.train_llm_vae_preference_model \
         --use_annealing True \
         --kl_loss_weight 1e-4 \
         --fixed_contexts True \
-        --fixed_llm_embeddings False \
+        --fixed_llm_embeddings False \   
         --use_last_token_embedding True \
         --up_sampling True \
         --controversial_only False \

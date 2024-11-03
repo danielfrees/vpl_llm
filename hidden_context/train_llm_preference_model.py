@@ -23,6 +23,13 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import PaddingStrategy
 from typing_extensions import Literal, TypeAlias
 
+import os
+from dotenv import load_dotenv
+load_dotenv() 
+HF_TOKEN = os.getenv("HUGGINGFACE_TOKEN", None)
+if not HF_TOKEN:
+    raise Exception("You must have a local .env file with HUGGINGFACE_TOKEN. Try again.")
+
 RewardModelType: TypeAlias = Literal["base", "mean_and_variance", "categorical"]
 DataSubset: TypeAlias = Literal["both", "helpful", "harmless"]
 
@@ -335,62 +342,69 @@ class CategoricalRewardTrainer(RewardTrainer):
 def get_hh_rlhf_dataset(
     data_subset: DataSubset,
     split: Literal["train", "test"],
-    dataset_size: int = 0,
+    dataset_size: int = 0,  
     data_path="Anthropic/hh-rlhf",
     use_subset_as_dir=True,     # new parameter
-    other_subsets=None
+    other_subsets=None,
+    use_data_subset: bool = False, # whether to use any data subsets
 ) -> Dataset:
     datasets: List[Dataset] = []
-    if other_subsets is None:
-        if data_path == "Anthropic/hh-rlhf":
-            if data_subset == "harmless" or data_subset == "both":
-                datasets.append(
-                    load_dataset(
-                        "Anthropic/hh-rlhf", data_dir="harmless-base", split=split
-                    ).map(lambda data: {"data_subset": "harmless"})
-                )
-            if data_subset == "helpful" or data_subset == "both":
-                datasets.append(
-                    load_dataset(
-                        "Anthropic/hh-rlhf", data_dir="helpful-base", split=split
-                    ).map(lambda data: {"data_subset": "helpful"})
-                )
-        else:
-            if not use_subset_as_dir:  # original version: combine all data subsets within the path
-                datasets.append(
-                    load_dataset(data_path, split=split).map(
-                        lambda data: {"data_subset": data_subset}
+    if not use_data_subset:
+        datasets.append(load_dataset(
+                        data_path, split=split
+                        ).map(lambda data: {"data_subset": "helpful"})  # as a dummy until i can figure out how to get rid of the stupid hardcoding of HH everywhere TODO
                     )
-                )
-            else:  # new version: use data_subset as subdirectory
-                if data_subset == "helpful" or data_subset == "both":
-                    datasets.append(
-                        load_dataset(
-                            data_path, data_dir="helpful", split=split
-                        ).map(lambda data: {"data_subset": "helpful"})
-                    )
+    else:
+        if other_subsets is None:
+            if data_path == "Anthropic/hh-rlhf":
                 if data_subset == "harmless" or data_subset == "both":
                     datasets.append(
                         load_dataset(
-                            data_path, data_dir="harmless", split=split
+                            "Anthropic/hh-rlhf", data_dir="harmless-base", split=split
                         ).map(lambda data: {"data_subset": "harmless"})
                     )
-    else:   # TODO: set subsets here
-        if other_subsets == 'ultra_feedback':
-            subsets = ['helpfulness', 'honesty', 'instruction_following', 'truthfulness']
-        elif other_subsets == 'single':
-            subsets = ['8', '4', '2', '1']
-        elif other_subsets == '84':
-            subsets = ['8', '4']
-        else:
-            subsets = []
-        for subset in subsets:
-            if data_subset == 'all' or data_subset == subset:
-                datasets.append(
-                    load_dataset(
-                        data_path, data_dir=subset, split=split
+                if data_subset == "helpful" or data_subset == "both":
+                    datasets.append(
+                        load_dataset(
+                            "Anthropic/hh-rlhf", data_dir="helpful-base", split=split
+                        ).map(lambda data: {"data_subset": "helpful"})
                     )
-                )
+            else:
+                if not use_subset_as_dir:  # original version: combine all data subsets within the path
+                    datasets.append(
+                        load_dataset(data_path, split=split).map(
+                            lambda data: {"data_subset": data_subset}
+                        )
+                    )
+                else:  # new version: use data_subset as subdirectory
+                    if data_subset == "helpful" or data_subset == "both":
+                        datasets.append(
+                            load_dataset(
+                                data_path, data_dir="helpful", split=split
+                            ).map(lambda data: {"data_subset": "helpful"})
+                        )
+                    if data_subset == "harmless" or data_subset == "both":
+                        datasets.append(
+                            load_dataset(
+                                data_path, data_dir="harmless", split=split
+                            ).map(lambda data: {"data_subset": "harmless"})
+                        )
+        else:   # TODO: set subsets here
+            if other_subsets == 'ultra_feedback':
+                subsets = ['helpfulness', 'honesty', 'instruction_following', 'truthfulness']
+            elif other_subsets == 'single':
+                subsets = ['8', '4', '2', '1']
+            elif other_subsets == '84':
+                subsets = ['8', '4']
+            else:
+                subsets = []
+            for subset in subsets:
+                if data_subset == 'all' or data_subset == subset:
+                    datasets.append(
+                        load_dataset(
+                            data_path, data_dir=subset, split=split
+                        )
+                    )
 
     if dataset_size:
         datasets = [
@@ -514,7 +528,7 @@ if __name__ == "__main__":
         if script_args.tokenizer_name is not None
         else script_args.model_name
     )
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True, add_eos_token=False)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, token = HF_TOKEN, add_eos_token=False)
 
     peft_config = LoraConfig(
         task_type=TaskType.SEQ_CLS,
