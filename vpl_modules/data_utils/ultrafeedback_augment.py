@@ -191,6 +191,6 @@ if __name__ == '__main__':
         train_subset.to_json(os.path.join(output_dir, user_type, 'train.jsonl'))
         test_subset.to_json(os.path.join(output_dir, user_type, 'test.jsonl'))
 
-# python -m hidden_context.data_utils.ultrafeedback_augment -a single -n P_4 -c
+# python -m vpl_modules.data_utils.ultrafeedback_augment -a single -n P_4 -c
 
-# python -m hidden_context.data_utils.ultrafeedback_augment -a 84 -n P
+# python -m vpl_modules.data_utils.ultrafeedback_augment -a 84 -n P

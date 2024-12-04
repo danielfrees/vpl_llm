@@ -14,7 +14,7 @@ from transformers import (
 
 import torch
 
-from hidden_context.train_llm_preference_model import (
+from vpl_modules.train_llm_preference_model import (
     DataSubset,
     get_hh_rlhf_dataset,
     concatenate_datasets,

@@ -54,10 +54,10 @@ class ScriptArguments:
     learning_rate: float = field(default=3e-6)
     weight_decay: float = field(default=0.001)
     model_name: str = field(
-        default="gpt2",
+        default="meta-llama/Llama-3.1-8B-Instruct",
         metadata={
             "help": "The model that you want to train from the Hugging Face hub. "
-            "E.g. gpt2, gpt2-xl, bert, etc."
+            "E.g. gpt2, bert, llama models, etc."
         },
     )
     data_path: str = field(

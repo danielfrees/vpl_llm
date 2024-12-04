@@ -8,15 +8,15 @@ from transformers import (
 import torch
 import random
 
-from hidden_context.data_utils.data_processing import (
+from vpl_modules.data_utils.data_processing import (
     ScriptArguments,
     generate_embeddings_with_llm,
     generate_contexts
 )
 
-from hidden_context.data_utils.simple_templates import *
+from vpl_modules.data_utils.simple_templates import *
 
-from hidden_context.train_llm_preference_model import (
+from vpl_modules.train_llm_preference_model import (
     DataSubset,
     get_hh_rlhf_dataset,
 )

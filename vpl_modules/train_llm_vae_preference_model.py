@@ -17,6 +17,7 @@ from transformers import (
 from transformers.utils import PaddingStrategy
 from .vae_utils import VAETrainer, VAEModel
 
+
 from .train_llm_preference_model import (
     get_step_decay_lr_lambda,
     get_cosine_decay_lr_lambda,
@@ -173,7 +174,7 @@ class ScriptArguments:
     other_subsets: str = field(
         default=None,
         metadata={"help": "specify the group of subsets if not using helpful/harmless. You can choose between"
-                          "ultra_feedback, pos_neg, set, single."},
+                        "ultra_feedback, pos_neg, set, single."},
     )
     use_last_token_embedding: bool = field(
         default=False,
@@ -213,7 +214,7 @@ class HHRLHFPreprocessor(object):
                 new_examples["embedding_rejected"].append(embeddings["embedding_rejected"])
                 contexts_embeddings = [{"embedding_chosen": context["embedding_chosen"],
                                         "embedding_rejected": context["embedding_rejected"]}
-                                       for context in contexts]
+                                    for context in contexts]
                 new_examples["contexts_embeddings"].append(contexts_embeddings)
                 new_examples["max_lengths"].append(0)
             new_examples["user_type"] = examples["data_subset"]
@@ -250,7 +251,7 @@ class HHRLHFPreprocessor(object):
             if self.args.fixed_contexts:
                 contexts_embeddings = [{"embedding_chosen": context["embedding_chosen"],
                                         "embedding_rejected": context["embedding_rejected"]}
-                                       for context in contexts]
+                                    for context in contexts]
                 new_examples["contexts_embeddings"].append(contexts_embeddings)
             else:
                 tokenized_context = []
@@ -517,6 +518,9 @@ def customized_optimizer(model, lr):
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args: ScriptArguments = parser.parse_args_into_dataclasses()[0]
+    
+    # Set W&B project name dynamically
+    os.environ["WANDB_PROJECT"] = script_args.wandb_project_name
 
     seed = script_args.seed
     random.seed(seed)
@@ -688,9 +692,11 @@ if __name__ == "__main__":
     # Train the model.
     latent_dim = script_args.latent_dim
     hidden_dim = script_args.hidden_dim
-    vae_model = VAEModel(encoder_embed_dim, decoder_embed_dim, hidden_dim, latent_dim, model, contexts_model,
-                         fixed_contexts=script_args.fixed_contexts,
-                         fixed_llm_embeddings=script_args.fixed_llm_embeddings,)
+    vae_model = VAEModel(encoder_embed_dim, decoder_embed_dim, hidden_dim, latent_dim, 
+                        llm_encoder = model, 
+                        llm_contexts_encoder = contexts_model,
+                        fixed_contexts=script_args.fixed_contexts,
+                        fixed_llm_embeddings=script_args.fixed_llm_embeddings,)
 
     trainer = trainer_class(
         model=vae_model,

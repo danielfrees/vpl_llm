@@ -1,6 +1,7 @@
 #!/bin/bash
 
-model_type=${1:-"gpt2"}  
+#model_type=${1:-"gpt2"}  
+model_type=${1:-"meta-llama/Llama-3.1-8B-Instruct"}
 context_sample_strategy=${2:-"random"}  
 num_random_contexts=${3:-5}  # Adjusted default to match function example
 embedding_pool_strategy=${4:-"last"}
@@ -14,7 +15,7 @@ echo "Synthetic dataset: False"
 # Loop through each data split and run the data generation pipeline
 for split in "train" "validation" "test"
 do
-    python -m hidden_context.data_utils.generate_prism_data \
+    python -m vpl_modules.data_utils.generate_prism_data \
         --output_dir data/prism \
         --context_sample_strategy ${context_sample_strategy} \
         --num_random_contexts ${num_random_contexts} \

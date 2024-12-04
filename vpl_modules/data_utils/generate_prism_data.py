@@ -95,7 +95,7 @@ def generate_prism_vpl_data(dataset: object,
         7. Map `objective` to the same thing as `data_subset`. 
         8. Set `controversial` to True only for controversy guided. I believe in the original paper this was marked for further analysis to emphasize that VPL works better on examples asking controversial/split responses, e.g. comparing cats vs dogs to be better in the pets dataset. The exact definition is left unclear in the OG paper. 
         11. Create a NEW `contexts` field. Each item in the `contexts` field will contain the keys `embedding_chosen`, `embedding_rejected`, and `original_id` (I think this `original_id` is just the row ID of the example used to create `embedding_chosen` and `embedding_rejected`). This is the field to be most careful in creating. + there are some hyperparameters to experiment with here, down the line. For all prior turns in the conversation (1 prior turn minimum, we will opt to NOT predict the first turn, based on other preferences for the same turn as that feels leaky to me (/IS leaky)), we can use ALL 5 choose 2 preference pairs in the dataset and add those to the NEW `contexts` list, or we can just choose the favorite vs. least favorite response (or fav vs. 2nd most fav response) from each prior turn. We can also sample prior turns when there have been many turns to minimize the length and 'soupiness' of the contexts. All of these will affect the learning of the Pair Encoder and Sequential Encoder in the VPL architecture and are thus important choices. So long as we only use embedding pairs from previous (chronologically) turns for the given conversation and user (or from any point in another conversation with this user), then we are not leaking data into the contexts. 
-        9. Use a similar framework as in `vpl_llm/hidden_context/data_utils/data_processing.generate_embeddings_with_llm()` to generate embeddings for the `chosen` and `rejected` ($s_A$ and $s_B$, respectively, with $[p,r]$ (prompts and responses concatenated). This is essential mapping the `chosen` and `rejected` fields from (1) to a hidden encoded state from the chosen pre-trained LLM (such as GPT2/ llama3). Map these to `embeddings` as a Dict[str, List[float]], where in the dictionary we have keys `embedding_chosen` with value = the LLM embedding of `chosen`, and the same for `embedding_rejected`.)
+        9. Use a similar framework as in `vpl_llm/vpl_modules/data_utils/data_processing.generate_embeddings_with_llm()` to generate embeddings for the `chosen` and `rejected` ($s_A$ and $s_B$, respectively, with $[p,r]$ (prompts and responses concatenated). This is essential mapping the `chosen` and `rejected` fields from (1) to a hidden encoded state from the chosen pre-trained LLM (such as GPT2/ llama3). Map these to `embeddings` as a Dict[str, List[float]], where in the dictionary we have keys `embedding_chosen` with value = the LLM embedding of `chosen`, and the same for `embedding_rejected`.)
         10. Create a `context_length` which is the length of the NEW FIELD `contexts`. This will NOT match the length of the original `contexts` field in Michael's data, as that is a list of each and every turn (prompt, response, prompt, response, prompt) etc., always ending with the current turn's prompt. Rather, the new contexts field will contain embeddings for previous `embedding_chosen` and `embedding_rejected` for the current user. In the (prompt, response, prompt, response, prompt) example, this means we should expect the NEW `context_length` to be 2, since we will include the two prior $[p,r]$ turn encoding dictionaries. This length will be multiplied if we include multiple comparison (e.g. all 5C2 comparisons) for each turn. For more details, see (11). 
         """
         CONTROVERSY_TYPE = 'controversy guided'   #Hf 'type' for controversy guided conversations
@@ -126,10 +126,10 @@ def generate_prism_vpl_data(dataset: object,
         
         # ===== augment the context field with chosen and rejected pairs from prior turns =====
         df = augment_contexts(df,
-                              with_embeddings = with_embeddings, 
-                              which_comparisons = context_sample_strategy,
-                              num_random = num_random_contexts,
-                              seed=329)
+                    with_embeddings = with_embeddings, 
+                    which_comparisons = context_sample_strategy,
+                    num_random = num_random_contexts,
+                    seed=329)
         # ======================================================================================
         df['contexts'] = df['augmented_context']
         df['context_length'] = df['contexts'].map(lambda x: len(x))
@@ -159,10 +159,10 @@ def generate_prism_vpl_data(dataset: object,
     
             
 def augment_contexts(df: pd.DataFrame,
-                     with_embeddings: bool = False, 
-                     which_comparisons: str = 'random',
-                     num_random: int = 5, 
-                     seed: int = 329):
+            with_embeddings: bool = False, 
+            which_comparisons: str = 'random',
+            num_random: int = 5, 
+            seed: int = 329):
     """
     Input: 
     df: pd.DataFrame
@@ -251,9 +251,9 @@ def augment_contexts(df: pd.DataFrame,
     return df
 
 def get_llm_embeddings(df: pd.DataFrame, 
-                       model_type: str, 
-                       embed_dim: int = 768, 
-                       pooling: str = 'last') -> pd.DataFrame:
+                    model_type: str, 
+                    embed_dim: int = 768, 
+                    pooling: str = 'last') -> pd.DataFrame:
     """
     Generates embeddings for 'chosen' and 'rejected' fields in the dataframe using a specified language model.
 
@@ -272,9 +272,12 @@ def get_llm_embeddings(df: pd.DataFrame,
         tokenizer = AutoTokenizer.from_pretrained("gpt2", token = HUGGINGFACE_TOKEN)
         model = AutoModelForSequenceClassification.from_pretrained("gpt2", num_labels=embed_dim, torch_dtype=torch.bfloat16)
         model.score.weight.data *= 0.01
-    elif model_type == "llama" or model_type == "meta-llama/Llama-2-7b-hf":
+    elif model_type == "meta-llama/Llama-2-7b-hf":
         tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf", token = HUGGINGFACE_TOKEN, add_eos_token=False)
         model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-2-7b-hf", torch_dtype=torch.bfloat16)
+    elif model_type == "meta-llama/Llama-3.1-8B-Instruct":
+        tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct", token = HUGGINGFACE_TOKEN, add_eos_token=False)
+        model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.1-8B-Instruct", torch_dtype=torch.bfloat16)
     else:
         raise ValueError(f"Model type '{model_type}' not supported.")
     

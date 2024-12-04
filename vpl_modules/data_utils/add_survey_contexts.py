@@ -11,11 +11,11 @@ from transformers import (
 
 import torch
 
-from hidden_context.train_llm_preference_model import (
+from vpl_modules.train_llm_preference_model import (
     concatenate_datasets,
 )
 
-from hidden_context.data_utils.data_processing import generate_embeddings_with_llm
+from vpl_modules.data_utils.data_processing import generate_embeddings_with_llm
 from datasets import load_dataset
 
 from copy import deepcopy

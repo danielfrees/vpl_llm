@@ -6,7 +6,8 @@ export NCCL_P2P_DISABLE="1"
 export NCCL_IB_DISABLE="1"
 
 # Argument signature, with default values
-model_name=${1:-"gpt2"}
+#model_name=${1:-"gpt2"}
+model_name=${1:-"meta-llama/Llama-3.1-8B-Instruct"}
 context_sample_strategy=${2:-"random"}
 num_random_contexts=${3:-5}  
 embedding_pool_strategy=${4:-"last"}
@@ -32,8 +33,9 @@ else
 fi
 
 # Train the model
-python -m hidden_context.train_llm_vae_preference_model \
+python -m vpl_modules.train_llm_vae_preference_model \
     --model_name=${model_name} \
+    --wandb_project_name vpl-llama31-8b-instruct \
     --data_path=${DATA_PATH} \
     --context_sample_strategy=${context_sample_strategy} \
     --num_random_contexts=${num_random_contexts} \
@@ -48,7 +50,7 @@ python -m hidden_context.train_llm_vae_preference_model \
     --gradient_accumulation_steps 8 \
     --latent_dim 512 \
     --hidden_dim 512 \
-    --learning_rate 3e-4 \
+    --learning_rate 5e-5 \
     --use_annealing True \
     --kl_loss_weight 1e-4 \
     --fixed_contexts True \

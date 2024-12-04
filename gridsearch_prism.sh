@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # Model and context strategy constants
-model_name="gpt2"  # add llama3.1-8b later once implemented and tested
+model_name="meta-llama/Llama-3.1-8B-Instruct" # add llama3.1-8b later once implemented and tested
 context_sample_strategy="random"
 num_train_epochs = 10  # May need to later adjust this if we aren't reaching convergence 
 force_reload="false"   # Don't reload datasets when unecessary 
 
 # Hyperparameters for grid search
-num_random_contexts_options=(5 10 15)
-embedding_pool_strategies=("last" "mean")
+num_random_contexts_options=(1 3 5)
+embedding_pool_strategies=("last")
 
 # Loop over each combination
 for num_random_contexts in "${num_random_contexts_options[@]}"; do
