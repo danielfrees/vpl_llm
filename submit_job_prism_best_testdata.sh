@@ -35,7 +35,7 @@ fi
 
 # Train the model
 python -m vpl_modules.train_llm_vae_preference_model \
-    --validation_or_test validation \
+    --validation_or_test test \
     --model_name=${model_name} \
     --data_path=${DATA_PATH} \
     --context_sample_strategy=${context_sample_strategy} \

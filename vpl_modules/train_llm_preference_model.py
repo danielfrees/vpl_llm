@@ -346,7 +346,7 @@ def get_hh_rlhf_dataset(
     data_path="Anthropic/hh-rlhf",
     use_subset_as_dir=True,     # new parameter
     other_subsets=None,
-    use_data_subset: bool = False, # whether to use any data subsets
+    use_data_subset: bool = False, # whether to use any data subsets, False for our (Daniel, Michael, Aditri) implementation
 ) -> Dataset:
     datasets: List[Dataset] = []
     if not use_data_subset:

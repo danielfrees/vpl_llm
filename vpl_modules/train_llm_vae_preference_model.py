@@ -554,9 +554,10 @@ if __name__ == "__main__":
         other_subsets=script_args.other_subsets,
         use_data_subset=False
     )
+    assert(script_args.validation_or_test == "test") # TODO: remove, adding this for quick testing
     eval_dataset = get_hh_rlhf_dataset(
         data_subset,
-        "validation",    # "test" for the original Poddar VPL work
+        script_args.validation_or_test,
         script_args.eval_dataset_size,
         data_path = script_args.data_path,
         other_subsets=script_args.other_subsets,
