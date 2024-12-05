@@ -13,8 +13,9 @@ num_random_contexts=${3:-5}
 embedding_pool_strategy=${4:-"last"}
 num_train_epochs=${5:-2}
 force_reload=${6:-"false"}
+fixed_contexts=${7:-"True"}
 
-DATA_PATH="data/prism/${model_name}/context_${context_sample_strategy}/numrandom_${num_random_contexts}/pooling_${embedding_pool_strategy}"
+DATA_PATH="data/data/prism/${model_name}/context_${context_sample_strategy}/numrandom_${num_random_contexts}/pooling_${embedding_pool_strategy}"
 
 echo "Model name: ${model_name}"
 echo "Context sample strategy: ${context_sample_strategy}"
@@ -35,7 +36,6 @@ fi
 # Train the model
 python -m vpl_modules.train_llm_vae_preference_model \
     --model_name=${model_name} \
-    --wandb_project_name vpl-llama31-8b-instruct \
     --data_path=${DATA_PATH} \
     --context_sample_strategy=${context_sample_strategy} \
     --num_random_contexts=${num_random_contexts} \
@@ -53,7 +53,7 @@ python -m vpl_modules.train_llm_vae_preference_model \
     --learning_rate 5e-5 \
     --use_annealing True \
     --kl_loss_weight 1e-4 \
-    --fixed_contexts True \
+    --fixed_contexts ${fixed_contexts} \
     --fixed_llm_embeddings False \
     --use_last_token_embedding True \
     --up_sampling False \

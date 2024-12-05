@@ -1,0 +1,61 @@
+Starting grid search with num_random_contexts=1 and embedding_pool_strategy=last
+Model name: meta-llama/Llama-3.1-8B-Instruct
+Context sample strategy: random
+Num random contexts: 1
+Embedding pool strategy: last
+Num train epochs: 10
+Force reload data: false
+VPL data for PRISM already exists. Skipping data generation.
+20744 5134
+trainable params: 58,720,256 || all params: 7,567,839,232 || trainable%: 0.7759
+[1;34mwandb[0m: 🚀 View run [33mvae_Llama-3.1-8B-Instruct__0_5e-05_cosine_10_0.0001_512_1024_seed0_contextrandom_poolinglast_numrandom1[0m at: [34mhttps://wandb.ai/michael-nlp/vpl-llama/runs/pjg4655i[0m
+[1;34mwandb[0m: Find logs at: [1;35mwandb/run-20241204_163210-pjg4655i/logs[0m
+
+🚨🚨🚨 WARNING: Failed for num_random_contexts=1, embedding_pool_strategy=last 🚨🚨🚨
+
+Starting grid search with num_random_contexts=3 and embedding_pool_strategy=last
+Model name: meta-llama/Llama-3.1-8B-Instruct
+Context sample strategy: random
+Num random contexts: 3
+Embedding pool strategy: last
+Num train epochs: 10
+Force reload data: false
+VPL data for PRISM already exists. Skipping data generation.
+20744 5134
+trainable params: 58,720,256 || all params: 7,567,839,232 || trainable%: 0.7759
+[1;34mwandb[0m: 🚀 View run [33mvae_Llama-3.1-8B-Instruct__0_5e-05_cosine_10_0.0001_512_1024_seed0_contextrandom_poolinglast_numrandom3[0m at: [34mhttps://wandb.ai/michael-nlp/vpl-llama/runs/pyv8cbpy[0m
+[1;34mwandb[0m: Find logs at: [1;35mwandb/run-20241204_170313-pyv8cbpy/logs[0m
+
+🚨🚨🚨 WARNING: Failed for num_random_contexts=3, embedding_pool_strategy=last 🚨🚨🚨
+
+Starting grid search with num_random_contexts=5 and embedding_pool_strategy=last
+Model name: meta-llama/Llama-3.1-8B-Instruct
+Context sample strategy: random
+Num random contexts: 5
+Embedding pool strategy: last
+Num train epochs: 10
+Force reload data: false
+Generating VPL data for PRISM...
+Starting VPL data generation for PRISM with model type: meta-llama/Llama-3.1-8B-Instruct
+Context sample strategy: random
+Num random contexts: 5
+Embedding pool strategy: last
+Synthetic dataset: False
+Index(['conversation_id', 'user_id', 'context', 'chosen', 'rejected',
+       'chosen_score', 'rejected_score', 'turns', 'type', 'dataset', 'split',
+       'flip', 'prompt', 'responses', 'original_label', 'label', 'Index',
+       'data_subset', 'objective', 'controversial', 'embedding_chosen',
+       'embedding_rejected', 'embeddings', 'augmented_context', 'contexts',
+       'context_length'],
+      dtype='object')
+Index(['conversation_id', 'user_id', 'context', 'chosen', 'rejected',
+       'chosen_score', 'rejected_score', 'turns', 'type', 'dataset', 'split',
+       'flip', 'prompt', 'responses', 'original_label', 'label', 'Index',
+       'data_subset', 'objective', 'controversial', 'embedding_chosen',
+       'embedding_rejected', 'embeddings', 'augmented_context', 'contexts',
+       'context_length'],
+      dtype='object')
+
+🚨🚨🚨 WARNING: Failed for num_random_contexts=5, embedding_pool_strategy=last 🚨🚨🚨
+
+Grid search completed.

@@ -365,7 +365,7 @@ def clean_df(df: pd.DataFrame) -> pd.DataFrame:
 def main():
     parser = argparse.ArgumentParser(description="Generate PRISM data for VPL training with cached LLM embeddings")
     parser.add_argument("--output_dir", type=str, required=True, help="Output directory name")
-    parser.add_argument("--model_type", type=str, default="gpt2", choices=["gpt2", "llama"], help="Model type for generating embeddings")
+    parser.add_argument("--model_type", type=str, default="gpt2", choices=["gpt2", "llama", "meta-llama/Llama-3.1-8B-Instruct"], help="Model type for generating embeddings")
     parser.add_argument("--context_sample_strategy", type=str, default="random", choices=["random", "top2", "bestworst", "max", "cum"], help="Strategy for sampling context pairs")
     parser.add_argument("--num_random_contexts", type=int, default=5, help="Number of random context pairs to sample")
     parser.add_argument("--with_embeddings", action="store_true", help="Flag to generate embeddings and cache them ahead of time for faster VPL training (and inference).")

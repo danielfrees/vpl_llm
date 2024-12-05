@@ -1,0 +1,13 @@
+Starting grid search with num_random_contexts=1 and embedding_pool_strategy=last
+Model name: meta-llama/Llama-3.1-8B-Instruct
+Context sample strategy: random
+Num random contexts: 1
+Embedding pool strategy: last
+Num train epochs: 10
+Force reload data: false
+Generating VPL data for PRISM...
+Starting VPL data generation for PRISM with model type: meta-llama/Llama-3.1-8B-Instruct
+Context sample strategy: random
+Num random contexts: 1
+Embedding pool strategy: last
+Synthetic dataset: False

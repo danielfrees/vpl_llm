@@ -520,7 +520,8 @@ if __name__ == "__main__":
     script_args: ScriptArguments = parser.parse_args_into_dataclasses()[0]
     
     # Set W&B project name dynamically
-    os.environ["WANDB_PROJECT"] = script_args.wandb_project_name
+    # os.environ["WANDB_PROJECT"] = script_args.wandb_project_name
+    os.environ["WANDB_PROJECT"] = "vpl-llama"
 
     seed = script_args.seed
     random.seed(seed)
@@ -534,9 +535,14 @@ if __name__ == "__main__":
         if script_args.model_name == 'gpt2':
             script_args.decoder_embed_dim = 768
             script_args.encoder_embed_dim = 768
-        if script_args.model_name == 'meta-llama/Llama-2-7b-hf':
+        elif script_args.model_name == 'meta-llama/Llama-2-7b-hf' \
+                or script_args.model_name == "meta-llama/Llama-3.1-8B-Instruct":
             script_args.decoder_embed_dim = 4096
             script_args.encoder_embed_dim = 4096
+        else:
+            raise ValueError("Last token embedding only supported for GPT2 and Llama models. ",
+                            "Model name should be one of 'gpt2', 'meta-llama/Llama-2-7b-hf', ",
+                            "'meta-llama/Llama-3.1-8B-Instruct'")
 
     data_subset = cast(DataSubset, script_args.data_subset)
     
