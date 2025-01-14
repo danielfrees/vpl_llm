@@ -2,7 +2,7 @@
 User-stratified data augmenation (reformatting, context augmentation, embeddings, etc.) 
 for input into VPL training with cached LLM embeddings. 
 
-PRISM
+CHATBOT ARENA
 """
 
 import pandas as pd 
@@ -19,12 +19,12 @@ import argparse
 from data_processing import generate_vpl_data
 load_dotenv()
 HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
-PRISM_DATASET = 'MichaelR207/prism_personalized_1023'
+CHATBOT_ARENA_DATASET = 'MichaelR207/chatbot_arena_personalized_1023'
 
 def main():
     parser = argparse.ArgumentParser(description="Generate PRISM data for VPL training with cached LLM embeddings")
     parser.add_argument("--output_dir", type=str, required=True, help="Output directory name")
-    parser.add_argument("--model_type", type=str, default="gpt2", choices=["gpt2", "llama", "meta-llama/Llama-3.1-8B-Instruct"], help="Model type for generating embeddings")
+    parser.add_argument("--model_type", type=str, default="gpt2", choices=["gpt2", "llama"], help="Model type for generating embeddings")
     parser.add_argument("--context_sample_strategy", type=str, default="random", choices=["random", "top2", "bestworst", "max", "cum"], help="Strategy for sampling context pairs")
     parser.add_argument("--num_random_contexts", type=int, default=5, help="Number of random context pairs to sample")
     parser.add_argument("--with_embeddings", action="store_true", help="Flag to generate embeddings and cache them ahead of time for faster VPL training (and inference).")
@@ -34,7 +34,7 @@ def main():
 
     args = parser.parse_args()
 
-    dataset = load_dataset(PRISM_DATASET)
+    dataset = load_dataset(CHATBOT_ARENA_DATASET)
     generate_vpl_data(dataset=dataset, 
                             dir_name=args.output_dir, 
                             model_type=args.model_type, 

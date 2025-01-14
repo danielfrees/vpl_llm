@@ -563,16 +563,26 @@ if __name__ == "__main__":
         other_subsets=script_args.other_subsets,
         use_data_subset=False
     )
-    print(len(train_dataset), len(eval_dataset))
+    test_dataset = get_hh_rlhf_dataset(
+        data_subset,
+        "test",   
+        script_args.eval_dataset_size,
+        data_path = script_args.data_path,
+        other_subsets=script_args.other_subsets,
+        use_data_subset=False
+    )
+    print(len(train_dataset), len(eval_dataset), len(test_dataset))
     if script_args.controversial_only:
         train_dataset = train_dataset.filter(lambda example: example['controversial'] == True)
         eval_dataset = eval_dataset.filter(lambda example: example['controversial'] == True)
+        test_dataset = test_dataset.filter(lambda example: example['controversial'] == True)
     elif script_args.up_sampling:
         train_dataset = up_sample_controversial(train_dataset, seed)
 
     if script_args.one_user:
         train_dataset = train_dataset.filter(lambda example: example['data_subset'] == script_args.one_user)
         eval_dataset = eval_dataset.filter(lambda example: example['data_subset'] == script_args.one_user)
+        test_dataset = test_dataset.filter(lambda example: example['data_subset'] == script_args.one_user)
     reward_model_type = cast(RewardModelType, script_args.reward_model_type)
 
     # Define the training args. Needs to be done before the model is loaded if you
@@ -693,6 +703,16 @@ if __name__ == "__main__":
         remove_columns=original_columns,
     )
     eval_dataset = eval_dataset.filter(
+        lambda x: x["max_lengths"] <= script_args.max_length
+    )
+    
+    test_dataset = test_dataset.map(
+        HHRLHFPreprocessor(script_args, tokenizer),
+        batched=True,
+        num_proc=num_proc,
+        remove_columns=original_columns,
+    )
+    test_dataset = test_dataset.filter(
         lambda x: x["max_lengths"] <= script_args.max_length
     )
 

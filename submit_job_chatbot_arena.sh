@@ -7,15 +7,13 @@ export NCCL_IB_DISABLE="1"
 
 # Argument signature, with default values
 model_name=${1:-"gpt2"}
-#model_name=${1:-"meta-llama/Llama-3.1-8B-Instruct"}
 context_sample_strategy=${2:-"random"}
 num_random_contexts=${3:-5}  
 embedding_pool_strategy=${4:-"last"}
 num_train_epochs=${5:-2}
 force_reload=${6:-"false"}
-fixed_contexts=${7:-"True"}
 
-DATA_PATH="data/data/prism/${model_name}/context_${context_sample_strategy}/numrandom_${num_random_contexts}/pooling_${embedding_pool_strategy}"
+DATA_PATH="data/chatbot_arena/${model_name}/context_${context_sample_strategy}/numrandom_${num_random_contexts}/pooling_${embedding_pool_strategy}"
 
 echo "Model name: ${model_name}"
 echo "Context sample strategy: ${context_sample_strategy}"
@@ -26,16 +24,15 @@ echo "Force reload data: ${force_reload}"
 
 # Check if data needs generation
 if [[ "$force_reload" == "true" || ! -f "${DATA_PATH}/train.jsonl" || ! -f "${DATA_PATH}/validation.jsonl" || ! -f "${DATA_PATH}/test.jsonl" ]]; then
-    echo "Generating VPL data for PRISM..."
+    echo "Generating VPL data for Chatbot Arena..."
     # Run the data generation script with the specified arguments
-    bash generate_prism_vpl_data.sh ${model_name} ${context_sample_strategy} ${num_random_contexts} ${embedding_pool_strategy}
+    bash generate_chatbot_arena_vpl_data.sh ${model_name} ${context_sample_strategy} ${num_random_contexts} ${embedding_pool_strategy}
 else
-    echo "VPL data for PRISM with specified config already exists. Skipping data generation."
+    echo "VPL data for Chatbot Arena with specified config already exists. Skipping data generation."
 fi
 
 # Train the model
-python -m vpl_modules.train_llm_vae_preference_model \
-    --validation_or_test validation \
+python -m hidden_context.train_llm_vae_preference_model \
     --model_name=${model_name} \
     --data_path=${DATA_PATH} \
     --context_sample_strategy=${context_sample_strategy} \
@@ -44,17 +41,17 @@ python -m vpl_modules.train_llm_vae_preference_model \
     --num_train_epochs=${num_train_epochs} \
     --reward_model_type=vae \
     --data_subset=both \
-    --log_dir="logs/${model_name}_prism" \
+    --log_dir="logs/${model_name}_chatbot_arena" \
     --bf16 True \
     --fp16 False \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
     --latent_dim 512 \
     --hidden_dim 512 \
-    --learning_rate 5e-5 \
+    --learning_rate 3e-4 \
     --use_annealing True \
     --kl_loss_weight 1e-4 \
-    --fixed_contexts ${fixed_contexts} \
+    --fixed_contexts True \
     --fixed_llm_embeddings False \
     --use_last_token_embedding True \
     --up_sampling False \

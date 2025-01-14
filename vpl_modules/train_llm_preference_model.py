@@ -341,7 +341,7 @@ class CategoricalRewardTrainer(RewardTrainer):
 
 def get_hh_rlhf_dataset(
     data_subset: DataSubset,
-    split: Literal["train", "test"],
+    split: Literal["train", "validation", "test"],
     dataset_size: int = 0,  
     data_path="Anthropic/hh-rlhf",
     use_subset_as_dir=True,     # new parameter
