@@ -14,8 +14,8 @@ echo "Synthetic dataset: False"
 # Loop through each data split and run the data generation pipeline
 for split in "train" "validation" "test"
 do
-    python -m hidden_context.data_utils.generate_chatbot_arena_data \
-        --output_dir data/chatbot_arena \
+    python -m vpl_modules.data_utils.generate_chatbot_arena_data \
+        --output_dir chatbot_arena \
         --context_sample_strategy ${context_sample_strategy} \
         --num_random_contexts ${num_random_contexts} \
         --with_embeddings \

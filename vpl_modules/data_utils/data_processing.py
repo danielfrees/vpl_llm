@@ -150,15 +150,15 @@ def generate_vpl_data(dataset: object,
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     if data_split == 'train':
-        train_df.to_json(os.path.join(output_dir, 'train.jsonl'), orient="records", lines=True, index=False)
+        train_df.to_json(os.path.join(output_dir, 'train.jsonl'), orient="records", lines=True)
     elif data_split == 'validation':
-        validation_df.to_json(os.path.join(output_dir, 'validation.jsonl'), orient="records", lines=True, index=False)
+        validation_df.to_json(os.path.join(output_dir, 'validation.jsonl'), orient="records", lines=True)
     elif data_split == 'test':
-        test_df.to_json(os.path.join(output_dir, 'test.jsonl'), orient="records", lines=True, index=False)
+        test_df.to_json(os.path.join(output_dir, 'test.jsonl'), orient="records", lines=True)
     elif data_split == 'all':
-        train_df.to_json(os.path.join(output_dir, 'train.jsonl'), orient="records", lines=True, index=False)
-        validation_df.to_json(os.path.join(output_dir, 'validation.jsonl'), orient="records", lines=True, index=False)
-        test_df.to_json(os.path.join(output_dir, 'test.jsonl'), orient="records", lines=True, index=False)
+        train_df.to_json(os.path.join(output_dir, 'train.jsonl'), orient="records", lines=True)
+        validation_df.to_json(os.path.join(output_dir, 'validation.jsonl'), orient="records", lines=True)
+        test_df.to_json(os.path.join(output_dir, 'test.jsonl'), orient="records", lines=True)
         
     return None
 
@@ -298,9 +298,13 @@ def get_llm_embeddings(df: pd.DataFrame,
 
         for key in ['chosen', 'rejected']:
             text = getattr(row, key)
-            tokens = tokenizer.pad(
-                tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512),
-                padding=True, pad_to_multiple_of=64
+            tokens = tokenizer(
+                text,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=512,
+                pad_to_multiple_of=64
             )
             input_ids = tokens["input_ids"].to("cuda")
             attention_mask = tokens["attention_mask"].to("cuda")
@@ -332,6 +336,9 @@ def get_llm_embeddings(df: pd.DataFrame,
     # Add the embeddings to the DataFrame
     df['embedding_chosen'] = embeddings_chosen
     df['embedding_rejected'] = embeddings_rejected
+    
+    print("Embedding chosen example:", df['embedding_chosen'].iloc[0])
+    print("Embedding rejected example:", df['embedding_rejected'].iloc[0])
     
     # stuff them into same dictionary to be consistent with VPL method
     df['embeddings'] = df.apply(

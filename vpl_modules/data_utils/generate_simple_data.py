@@ -1,26 +1,20 @@
 # This file is used to generate synthetic language dataset
 from typing import cast
-
 from transformers import (
     HfArgumentParser,
 )
-
 import torch
 import random
-
 from vpl_modules.data_utils.data_processing import (
     ScriptArguments,
     generate_embeddings_with_llm,
     generate_contexts
 )
-
 from vpl_modules.data_utils.simple_templates import *
-
 from vpl_modules.train_llm_preference_model import (
     DataSubset,
     get_hh_rlhf_dataset,
 )
-
 import numpy as np
 
 

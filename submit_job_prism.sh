@@ -1,4 +1,5 @@
 #!/bin/bash
+export NUM_GPUS="1"
 
 export WANDB_MODE=online
 export WANDB_PROJECT=vpl
@@ -15,6 +16,7 @@ num_train_epochs=${5:-2}
 force_reload=${6:-"false"}
 fixed_contexts=${7:-"True"}
 
+export PYTHONPATH=/home/ubuntu/gpu-fall-24/personalized-reward-models/personalized-reward-models/personalized_reward_models:$PYTHONPATH
 DATA_PATH="data/data/prism/${model_name}/context_${context_sample_strategy}/numrandom_${num_random_contexts}/pooling_${embedding_pool_strategy}"
 
 echo "Model name: ${model_name}"
@@ -34,7 +36,7 @@ else
 fi
 
 # Train the model
-python -m vpl_modules.train_llm_vae_preference_model \
+torchrun --nproc_per_node=$NUM_GPUS -m vpl.vpl_llm.vpl_modules.train_llm_vae_preference_model \
     --validation_or_test validation \
     --model_name=${model_name} \
     --data_path=${DATA_PATH} \

@@ -16,7 +16,9 @@ import os
 from typing import List, Dict, Union, Tuple
 from dotenv import load_dotenv
 import argparse
-from data_processing import generate_vpl_data
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from data_utils.data_processing import generate_vpl_data
 load_dotenv()
 HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
 PRISM_DATASET = 'MichaelR207/prism_personalized_1023'
@@ -34,7 +36,7 @@ def main():
 
     args = parser.parse_args()
 
-    dataset = load_dataset(PRISM_DATASET)
+    dataset = load_dataset(PRISM_DATASET, token = HUGGINGFACE_TOKEN)
     generate_vpl_data(dataset=dataset, 
                             dir_name=args.output_dir, 
                             model_type=args.model_type, 

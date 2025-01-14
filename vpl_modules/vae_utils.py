@@ -6,7 +6,9 @@ import torch.nn as nn
 from transformers import Trainer, EvalPrediction
 import wandb
 from transformers.optimization import get_cosine_schedule_with_warmup
-
+from transformers.trainer_utils import SaveStrategy
+from transformers import is_torch_xla_available
+from typing import Dict
 
 class PairEncoder(nn.Module):
     """
@@ -162,16 +164,16 @@ class VAEModel(nn.Module):
 
 class VAETrainer(Trainer):
     def __init__(
-        self, *args, lr_lambda=None, kl_loss_weight=None, use_annealing=False, **kwargs
+        self, *args, test_dataset=None, lr_lambda=None, kl_loss_weight=None, use_annealing=False, **kwargs
     ):
         super().__init__(*args, **kwargs)
         self.lr_lambda = lr_lambda
         self.kl_loss_weight = kl_loss_weight
         self.use_annealing = use_annealing
+        self.test_dataset = test_dataset
         self.annealer = Annealer(
-            total_steps=1e4, shape="cosine", baseline=0.1, cyclical=True    # todo: change total_step here
+            total_steps=1e4, shape="cosine", baseline=0.1, cyclical=True
         )
-
     @classmethod
     def per_sample_loss(cls, rewards_chosen, rewards_rejected):
         return -nn.functional.logsigmoid(rewards_chosen - rewards_rejected)
@@ -322,7 +324,55 @@ class VAETrainer(Trainer):
         )
         self.lr_scheduler = scheduler
         return scheduler
+    
+    def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time):
+        if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
 
+            logs: Dict[str, float] = {}
+
+            # all_gather + mean() to get average loss over all processes
+            tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
+
+            # reset tr_loss to zero
+            tr_loss -= tr_loss
+
+            logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
+            if grad_norm is not None:
+                logs["grad_norm"] = grad_norm.detach().item() if isinstance(grad_norm, torch.Tensor) else grad_norm
+            logs["learning_rate"] = self._get_learning_rate()
+
+            self._total_loss_scalar += tr_loss_scalar
+            self._globalstep_last_logged = self.state.global_step
+            self.store_flos()
+
+            self.log(logs, start_time)
+
+        metrics = None
+        if self.control.should_evaluate:
+            # Validation evaluation
+            metrics = self._evaluate(trial, ignore_keys_for_eval)
+            self.log(metrics)
+            self.save_metrics("eval", metrics)
+
+            # Test evaluation
+            if self.test_dataset is not None:
+                test_metrics = self.evaluate(eval_dataset=self.test_dataset, ignore_keys=ignore_keys_for_eval)
+                
+                # Add a prefix to differentiate test metrics
+                test_metrics = {f"test_{k}": v for k, v in test_metrics.items()}
+                
+                self.log(test_metrics)
+                self.save_metrics("test", test_metrics)
+
+            # Determine if the model should be saved based on the evaluation strategy
+            is_new_best_metric = self._determine_best_metric(metrics=metrics, trial=trial)
+            if self.args.save_strategy == SaveStrategy.BEST:
+                self.control.should_save = is_new_best_metric
+
+        if self.control.should_save:
+            self._save_checkpoint(model, trial)
+            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
+                
     @classmethod
     def compute_metrics(cls, eval_prediction: EvalPrediction):
         rewards_chosen, rewards_rejected, mean, log_var, z, user_type = (
@@ -339,13 +389,21 @@ class VAETrainer(Trainer):
 
         def plot_latent(latent):
             from sklearn.manifold import TSNE
-            z_embedding = TSNE(n_components=2, init='random', perplexity=20, learning_rate="auto").fit_transform(latent.numpy())
-            import matplotlib.pyplot as plt
-            colors = [f"C{int(i)}" for i in user_type]
-            plt.scatter(z_embedding[:, 0], z_embedding[:, 1], c=colors)
-            im = wandb.Image(plt)
-            plt.close()
-            return im
+            def plot_latent(latent):
+                # Ensure latent is numerical
+                if isinstance(latent, np.ndarray):
+                    latent = latent.astype(np.float32)
+                elif hasattr(latent, 'numpy'):  # If latent is a PyTorch tensor
+                    latent = latent.detach().cpu().numpy().astype(np.float32)
+                print("Latent shape:", latent.shape)
+                print("Latent dtype:", latent.dtype)
+                z_embedding = TSNE(n_components=2, init='random', perplexity=20, learning_rate=200).fit_transform(latent)
+                import matplotlib.pyplot as plt
+                colors = [f"C{int(i)}" for i in user_type]
+                plt.scatter(z_embedding[:, 0], z_embedding[:, 1], c=colors)
+                im = wandb.Image(plt)
+                plt.close()
+                return im
         im1 = plot_latent(mean)
         im2 = plot_latent(z)
 

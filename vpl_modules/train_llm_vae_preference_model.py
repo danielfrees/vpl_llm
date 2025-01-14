@@ -37,6 +37,10 @@ if not HF_TOKEN:
 @dataclass
 class ScriptArguments:
     local_rank: int = field(default=-1, metadata={"help": "Used for multi-gpu"})
+    validation_or_test: str = field(
+        default="validation",
+        metadata={"help": "[DEPRECATED] Whether to run on the validation or test set. Used for janky test set eval since wandb is glithy"},
+    )
     resume_from_checkpoint: bool = field(
         default=False,
         metadata={"help": "If you want to resume training where it left off."},
@@ -554,10 +558,10 @@ if __name__ == "__main__":
         other_subsets=script_args.other_subsets,
         use_data_subset=False
     )
-    assert(script_args.validation_or_test == "test") # TODO: remove, adding this for quick testing
+    #assert(script_args.validation_or_test == "test") # TODO: remove, adding this for quick testing
     eval_dataset = get_hh_rlhf_dataset(
         data_subset,
-        script_args.validation_or_test,
+        "validation",
         script_args.eval_dataset_size,
         data_path = script_args.data_path,
         other_subsets=script_args.other_subsets,
@@ -730,6 +734,7 @@ if __name__ == "__main__":
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
+        test_dataset=test_dataset,
         compute_metrics=trainer_class.compute_metrics,
         data_collator=RewardDataCollatorWithPadding(
             args=script_args,

@@ -16,7 +16,7 @@ echo "Synthetic dataset: False"
 for split in "train" "validation" "test"
 do
     python -m vpl_modules.data_utils.generate_prism_data \
-        --output_dir data/prism \
+        --output_dir prism \
         --context_sample_strategy ${context_sample_strategy} \
         --num_random_contexts ${num_random_contexts} \
         --with_embeddings \

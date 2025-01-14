@@ -37,4 +37,5 @@ for model_name in "${model_names[@]}"; do
                 echo -e "\n🚨🚨🚨 WARNING: Failed for model=${model_name}, num_random_contexts=${num_random_contexts}, embedding_pool_strategy=${embedding_pool_strategy} 🚨🚨🚨\n"
             fi
         done
-   
+    done
+done
